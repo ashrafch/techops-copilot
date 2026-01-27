@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi uvicorn[standard] email-validator
+RUN pip install --no-cache-dir fastapi uvicorn[standard] email-validator psycopg[binary]
 
 COPY app /app/app
 
