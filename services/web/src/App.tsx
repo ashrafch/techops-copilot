@@ -1,13 +1,39 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, createApiClient, type Ticket } from "./api";
+import { ApiError, createApiClient, type IntakeRequest, type Ticket } from "./api";
 import "./App.css";
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
 const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY ?? "";
+const DEFAULT_WEBHOOK_URL =
+  import.meta.env.VITE_WEBHOOK_URL ?? "http://localhost:5678/webhook/ticket-intake";
+const DEFAULT_INTAKE_MODE = import.meta.env.VITE_INTAKE_MODE ?? "webhook";
+const EMAIL_HISTORY_KEY = "techops.email_history";
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function loadEmailHistory(): string[] {
+  try {
+    const raw = window.localStorage.getItem(EMAIL_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => String(item).trim().toLowerCase())
+      .filter((item) => isValidEmail(item));
+  } catch {
+    return [];
+  }
+}
+
+function persistEmailHistory(emails: string[]) {
+  window.localStorage.setItem(EMAIL_HISTORY_KEY, JSON.stringify(emails));
 }
 
 function getErrorMessage(error: unknown): string {
@@ -19,13 +45,31 @@ function getErrorMessage(error: unknown): string {
 function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
+  const [webhookUrl, setWebhookUrl] = useState(DEFAULT_WEBHOOK_URL);
+  const [intakeMode, setIntakeMode] = useState(DEFAULT_INTAKE_MODE);
   const [tenantId, setTenantId] = useState("demo");
   const [statusFilter, setStatusFilter] = useState("OPEN");
   const [selectedTicketId, setSelectedTicketId] = useState<string>("");
   const [searchText, setSearchText] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [notificationEmail, setNotificationEmail] = useState("");
+  const [customEmailHistory, setCustomEmailHistory] = useState<string[]>(() => loadEmailHistory());
+  const [createForm, setCreateForm] = useState({
+    requesterName: "",
+    requesterEmail: "",
+    subject: "",
+    descriptionRaw: "",
+    priority: "P3",
+    machineLine: "",
+    machineStation: "",
+    machineSerial: "",
+  });
 
   const queryClient = useQueryClient();
-  const api = useMemo(() => createApiClient({ baseUrl, apiKey }), [baseUrl, apiKey]);
+  const api = useMemo(
+    () => createApiClient({ baseUrl, apiKey, webhookUrl }),
+    [baseUrl, apiKey, webhookUrl],
+  );
 
   const health = useQuery({
     queryKey: ["health", baseUrl],
@@ -54,6 +98,26 @@ function App() {
     enabled: Boolean(selectedTicketId),
   });
 
+  const tenantRoute = useQuery({
+    queryKey: ["tenant-route", baseUrl, apiKey, tenantId],
+    queryFn: () => api.getTenantRoute(tenantId),
+  });
+
+  const tenantEmailHistory = useQuery({
+    queryKey: ["tenant-email-history", baseUrl, apiKey, tenantId],
+    queryFn: () => api.getTenantEmailHistory(tenantId, 100),
+  });
+
+  const emailHistory = useMemo(() => {
+    const fromApi = (tenantEmailHistory.data ?? []).map((item) => item.email.toLowerCase());
+    return Array.from(new Set([...fromApi, ...customEmailHistory])).filter((item) =>
+      isValidEmail(item),
+    );
+  }, [tenantEmailHistory.data, customEmailHistory]);
+
+  const effectiveNotificationEmail =
+    notificationEmail.trim().toLowerCase() || (tenantRoute.data?.to_emails?.[0] ?? "").toLowerCase();
+
   const closeMutation = useMutation({
     mutationFn: (ticketId: string) => api.closeTicket(ticketId),
     onSuccess: () => {
@@ -62,6 +126,87 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
   });
+
+  const createMutation = useMutation({
+    mutationFn: async (payload: IntakeRequest) => {
+      if (intakeMode === "webhook") {
+        const target = effectiveNotificationEmail;
+        if (!isValidEmail(target)) {
+          throw new ApiError("Notification email is required and must be valid", 422);
+        }
+        const result = await api.createTicketViaWebhook(payload, target);
+        return { ticket_id: result.ticket_id, status: result.status };
+      }
+      return api.createTicket(payload);
+    },
+    onSuccess: (result) => {
+      setCreateError("");
+      setSelectedTicketId(result.ticket_id);
+      const normalizedRequester = createForm.requesterEmail.trim().toLowerCase();
+      const normalizedTarget = effectiveNotificationEmail;
+      setCustomEmailHistory((prev) => {
+        const merged = Array.from(
+          new Set([normalizedRequester, normalizedTarget, ...prev].filter((item) => isValidEmail(item))),
+        );
+        persistEmailHistory(merged);
+        return merged;
+      });
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket"] });
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+      queryClient.invalidateQueries({ queryKey: ["tenant-email-history"] });
+      setNotificationEmail("");
+      setCreateForm({
+        requesterName: "",
+        requesterEmail: "",
+        subject: "",
+        descriptionRaw: "",
+        priority: "P3",
+        machineLine: "",
+        machineStation: "",
+        machineSerial: "",
+      });
+    },
+    onError: (error) => {
+      setCreateError(getErrorMessage(error));
+    },
+  });
+
+  function submitCreateTicket(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!createForm.requesterName.trim() || !createForm.requesterEmail.trim()) {
+      setCreateError("Requester name and email are required.");
+      return;
+    }
+    if (!createForm.subject.trim() || !createForm.descriptionRaw.trim()) {
+      setCreateError("Subject and description are required.");
+      return;
+    }
+    if (intakeMode === "webhook" && !isValidEmail(effectiveNotificationEmail)) {
+      setCreateError("Notification email is required for webhook mode.");
+      return;
+    }
+
+    const payload: IntakeRequest = {
+      tenant_id: tenantId.trim(),
+      source: "ui",
+      requester: {
+        name: createForm.requesterName.trim(),
+        email: createForm.requesterEmail.trim(),
+      },
+      subject: createForm.subject.trim(),
+      description_raw: createForm.descriptionRaw.trim(),
+      priority: createForm.priority as IntakeRequest["priority"],
+      machine: {
+        line: createForm.machineLine.trim(),
+        station: createForm.machineStation.trim(),
+        serial: createForm.machineSerial.trim(),
+      },
+    };
+
+    createMutation.mutate(payload);
+  }
 
   const rows = tickets.data ?? [];
   const filteredRows = rows.filter((ticket) => {
@@ -107,6 +252,17 @@ function App() {
           />
         </label>
         <label>
+          Intake Mode
+          <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
+            <option value="webhook">webhook (recommended)</option>
+            <option value="api">api (/intake direct)</option>
+          </select>
+        </label>
+        <label>
+          Webhook URL
+          <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
+        </label>
+        <label>
           Tenant
           <input value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
         </label>
@@ -138,6 +294,110 @@ function App() {
       </section>
 
       <main className="content-grid">
+        <section className="card create-card">
+          <h2>Create Ticket</h2>
+          <form className="create-form" onSubmit={submitCreateTicket}>
+            <label className="full-row">
+              Notification Email
+              <input
+                type="email"
+                list="notification-email-history"
+                value={notificationEmail || (tenantRoute.data?.to_emails?.[0] ?? "")}
+                onChange={(e) => setNotificationEmail(e.target.value)}
+                placeholder="Select or type destination email"
+              />
+              <datalist id="notification-email-history">
+                {emailHistory.map((email) => (
+                  <option key={email} value={email} />
+                ))}
+              </datalist>
+            </label>
+            <label>
+              Requester Name
+              <input
+                value={createForm.requesterName}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, requesterName: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Requester Email
+              <input
+                type="email"
+                value={createForm.requesterEmail}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, requesterEmail: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Subject
+              <input
+                value={createForm.subject}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, subject: e.target.value }))}
+              />
+            </label>
+            <label>
+              Priority
+              <select
+                value={createForm.priority}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, priority: e.target.value }))
+                }
+              >
+                <option value="P1">P1</option>
+                <option value="P2">P2</option>
+                <option value="P3">P3</option>
+                <option value="P4">P4</option>
+              </select>
+            </label>
+            <label className="full-row">
+              Description
+              <textarea
+                rows={3}
+                value={createForm.descriptionRaw}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, descriptionRaw: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Machine Line
+              <input
+                value={createForm.machineLine}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, machineLine: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Machine Station
+              <input
+                value={createForm.machineStation}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, machineStation: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Machine Serial
+              <input
+                value={createForm.machineSerial}
+                onChange={(e) =>
+                  setCreateForm((prev) => ({ ...prev, machineSerial: e.target.value }))
+                }
+              />
+            </label>
+            <div className="create-actions full-row">
+              <button type="submit" disabled={createMutation.isPending}>
+                {createMutation.isPending ? "Creating..." : "Create Ticket"}
+              </button>
+              {createError && <p className="error">{createError}</p>}
+            </div>
+          </form>
+        </section>
+
         <section className="card list-card">
           <div className="list-head">
             <h2>Ticket Inbox</h2>

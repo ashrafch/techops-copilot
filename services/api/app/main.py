@@ -13,6 +13,7 @@ from app.db.session import DatabaseConnectionError, DatabaseNotConfiguredError
 from app.routers.events import router as events_router
 from app.routers.health import router as health_router
 from app.routers.intake import router as intake_router
+from app.routers.routes import router as routes_router
 from app.routers.tickets import router as tickets_router
 
 settings = get_settings()
@@ -95,4 +96,5 @@ def handle_db_unavailable(request: Request, exc: DatabaseConnectionError):
 app.include_router(intake_router)
 app.include_router(tickets_router)
 app.include_router(events_router)
+app.include_router(routes_router)
 app.include_router(health_router)
