@@ -40,6 +40,8 @@ function Assert-Equal {
 
 Write-Output "Starting containers..."
 docker compose up -d postgres_app minio api | Out-Null
+Write-Output "Applying database migrations..."
+powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1 | Out-Null
 
 Write-Output "Waiting for API health..."
 Wait-ForHealth -Url $BaseUrl

@@ -207,6 +207,15 @@ Per forzare la policy anche se `API_KEY` non è ancora valorizzata:
 
 Endpoint sempre pubblici: `/health`, `/ready`.
 
+## RBAC (foundation enterprise, opzionale)
+
+Se abiliti:
+`ENFORCE_RBAC=true`
+
+Le operazioni di scrittura (`/intake`, `/events`, `/tickets/*/assign`, `/tickets/*/status`, `/tickets/*/close`) richiedono header:
+
+`X-User-Role: admin` oppure `X-User-Role: operator`
+
 ## Rate limiting (opzionale)
 
 `RATE_LIMIT_RPM` limita richieste/minuto per IP+path sugli endpoint business.
@@ -262,3 +271,14 @@ Modalita' enterprise consigliata:
 - non aggiornare la route globale del tenant a ogni ticket;
 - passa il destinatario nel payload webhook (`notification.to_emails`) e risolvilo nel workflow n8n con fallback alla route tenant.
 - guida operativa: `n8n/docs/enterprise_recipient_override.md`
+
+Workflow ticket enterprise (in sviluppo):
+- stati supportati: `OPEN`, `IN_PROGRESS`, `WAITING`, `RESOLVED`, `CLOSED`
+- assegnazione owner ticket:
+  - `PATCH /tickets/{ticket_id}/assign` con body `{"assignee_name":"...","assignee_email":"..."}`
+  - `PATCH /tickets/{ticket_id}/status` con body `{"status":"IN_PROGRESS"}`
+
+Migrazioni DB idempotenti:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1
+```

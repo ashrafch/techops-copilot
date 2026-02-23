@@ -10,6 +10,9 @@ $ErrorActionPreference = "Stop"
 Write-Output "Starting dependencies..."
 docker compose up -d postgres_app minio | Out-Null
 
+Write-Output "Applying database migrations..."
+powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1 | Out-Null
+
 Write-Output "Building API image..."
 docker compose build api | Out-Null
 

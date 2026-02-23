@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, createApiClient, type IntakeRequest, type Ticket } from "./api";
+import { ApiError, createApiClient, type IntakeRequest, type Ticket, type TicketStatus } from "./api";
 import "./App.css";
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
@@ -52,7 +52,12 @@ function App() {
   const [selectedTicketId, setSelectedTicketId] = useState<string>("");
   const [searchText, setSearchText] = useState("");
   const [createError, setCreateError] = useState("");
+  const [assignError, setAssignError] = useState("");
+  const [statusError, setStatusError] = useState("");
   const [notificationEmail, setNotificationEmail] = useState("");
+  const [assigneeName, setAssigneeName] = useState("");
+  const [assigneeEmail, setAssigneeEmail] = useState("");
+  const [nextStatus, setNextStatus] = useState<TicketStatus>("OPEN");
   const [customEmailHistory, setCustomEmailHistory] = useState<string[]>(() => loadEmailHistory());
   const [createForm, setCreateForm] = useState({
     requesterName: "",
@@ -125,6 +130,30 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: (args: { ticketId: string; assigneeName: string; assigneeEmail: string }) =>
+      api.assignTicket(args.ticketId, args.assigneeName, args.assigneeEmail),
+    onSuccess: () => {
+      setAssignError("");
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket"] });
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+    },
+    onError: (error) => setAssignError(getErrorMessage(error)),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: (args: { ticketId: string; status: TicketStatus }) =>
+      api.updateTicketStatus(args.ticketId, args.status),
+    onSuccess: () => {
+      setStatusError("");
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket"] });
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+    },
+    onError: (error) => setStatusError(getErrorMessage(error)),
   });
 
   const createMutation = useMutation({
@@ -270,6 +299,9 @@ function App() {
           Status
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="OPEN">OPEN</option>
+            <option value="IN_PROGRESS">IN_PROGRESS</option>
+            <option value="WAITING">WAITING</option>
+            <option value="RESOLVED">RESOLVED</option>
             <option value="CLOSED">CLOSED</option>
             <option value="ALL">ALL</option>
           </select>
@@ -462,12 +494,71 @@ function App() {
               </div>
               <div className="detail-meta">
                 <p>Tenant: {selectedTicket.data.tenant_id}</p>
+                <p>Status: {selectedTicket.data.status}</p>
                 <p>Requester: {selectedTicket.data.requester_name}</p>
                 <p>Email: {selectedTicket.data.requester_email}</p>
+                <p>
+                  Assignee: {selectedTicket.data.assignee_name || "-"} /{" "}
+                  {selectedTicket.data.assignee_email || "-"}
+                </p>
                 <p>
                   Machine: {selectedTicket.data.machine_line}/{selectedTicket.data.machine_station}/
                   {selectedTicket.data.machine_serial}
                 </p>
+              </div>
+              <div className="detail-actions">
+                <h3>Assignment</h3>
+                <div className="inline-form">
+                  <input
+                    placeholder="Assignee name"
+                    value={assigneeName}
+                    onChange={(e) => setAssigneeName(e.target.value)}
+                  />
+                  <input
+                    type="email"
+                    placeholder="Assignee email"
+                    value={assigneeEmail}
+                    onChange={(e) => setAssigneeEmail(e.target.value)}
+                  />
+                  <button
+                    onClick={() =>
+                      assignMutation.mutate({
+                        ticketId: selectedTicket.data.ticket_id,
+                        assigneeName: assigneeName.trim(),
+                        assigneeEmail: assigneeEmail.trim(),
+                      })
+                    }
+                    disabled={assignMutation.isPending}
+                  >
+                    {assignMutation.isPending ? "Saving..." : "Assign"}
+                  </button>
+                </div>
+                {assignError && <p className="error">{assignError}</p>}
+                <h3>Status</h3>
+                <div className="inline-form">
+                  <select
+                    value={nextStatus}
+                    onChange={(e) => setNextStatus(e.target.value as TicketStatus)}
+                  >
+                    <option value="OPEN">OPEN</option>
+                    <option value="IN_PROGRESS">IN_PROGRESS</option>
+                    <option value="WAITING">WAITING</option>
+                    <option value="RESOLVED">RESOLVED</option>
+                    <option value="CLOSED">CLOSED</option>
+                  </select>
+                  <button
+                    onClick={() =>
+                      statusMutation.mutate({
+                        ticketId: selectedTicket.data.ticket_id,
+                        status: nextStatus,
+                      })
+                    }
+                    disabled={statusMutation.isPending}
+                  >
+                    {statusMutation.isPending ? "Updating..." : "Update Status"}
+                  </button>
+                </div>
+                {statusError && <p className="error">{statusError}</p>}
               </div>
               <h3>Timeline</h3>
               {selectedEvents.isLoading && <p>Loading timeline...</p>}

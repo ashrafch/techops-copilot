@@ -61,3 +61,29 @@ def test_intake_rejects_invalid_priority():
 
     response = client.post("/intake", json=payload)
     assert response.status_code == 422
+
+
+def test_update_ticket_status_and_assignment():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Lifecycle and assignment")
+
+    status_update = client.patch(
+        f"/tickets/{ticket_id}/status",
+        json={"status": "IN_PROGRESS"},
+    )
+    assert status_update.status_code == 200
+    assert status_update.json()["status"] == "IN_PROGRESS"
+
+    assign = client.patch(
+        f"/tickets/{ticket_id}/assign",
+        json={"assignee_name": "Ops User", "assignee_email": "ops.user@example.com"},
+    )
+    assert assign.status_code == 200
+    assert assign.json()["assignee_email"] == "ops.user@example.com"
+
+    ticket = client.get(f"/tickets/{ticket_id}")
+    assert ticket.status_code == 200
+    payload = ticket.json()
+    assert payload["status"] == "IN_PROGRESS"
+    assert payload["assignee_name"] == "Ops User"
+    assert payload["assignee_email"] == "ops.user@example.com"

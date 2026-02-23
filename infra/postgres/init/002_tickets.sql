@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   ticket_id TEXT UNIQUE NOT NULL,
 
   tenant_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED')),
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'IN_PROGRESS', 'WAITING', 'RESOLVED', 'CLOSED')),
 
   subject TEXT NOT NULL,
   priority TEXT NOT NULL CHECK (priority IN ('P1', 'P2', 'P3', 'P4')),  -- P1..P4
@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS tickets (
 
   requester_name TEXT NOT NULL,
   requester_email TEXT NOT NULL,
+  assignee_name TEXT NOT NULL DEFAULT '',
+  assignee_email TEXT NOT NULL DEFAULT '',
 
   machine_line TEXT NOT NULL DEFAULT '',
   machine_station TEXT NOT NULL DEFAULT '',
@@ -32,5 +34,6 @@ CREATE TABLE IF NOT EXISTS tickets (
 -- Indici utili
 CREATE INDEX IF NOT EXISTS idx_tickets_tenant_created ON tickets (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tickets_status_created ON tickets (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tickets_assignee_email ON tickets (assignee_email);
 
 -- Trigger-like: aggiorna updated_at automaticamente (senza trigger, lo faremo da API per semplicità)

@@ -1,4 +1,4 @@
-export type TicketStatus = "OPEN" | "CLOSED";
+export type TicketStatus = "OPEN" | "IN_PROGRESS" | "WAITING" | "RESOLVED" | "CLOSED";
 export type TicketPriority = "P1" | "P2" | "P3" | "P4";
 export type EventType = "CREATED" | "EMAIL_SENT" | "CLOSED" | "NOTE";
 
@@ -11,6 +11,8 @@ export interface Ticket {
   description_raw: string;
   requester_name: string;
   requester_email: string;
+  assignee_name: string;
+  assignee_email: string;
   machine_line: string;
   machine_station: string;
   machine_serial: string;
@@ -179,6 +181,16 @@ export function createApiClient(options: ApiClientOptions) {
     closeTicket: (ticketId: string) =>
       patchJson<{ ticket_id: string; status: TicketStatus }>(
         `/tickets/${encodeURIComponent(ticketId)}/close`,
+      ),
+    updateTicketStatus: (ticketId: string, status: TicketStatus) =>
+      patchJson<{ ticket_id: string; status: TicketStatus }>(
+        `/tickets/${encodeURIComponent(ticketId)}/status`,
+        { status },
+      ),
+    assignTicket: (ticketId: string, assigneeName: string, assigneeEmail: string) =>
+      patchJson<{ ticket_id: string; assignee_name: string; assignee_email: string }>(
+        `/tickets/${encodeURIComponent(ticketId)}/assign`,
+        { assignee_name: assigneeName, assignee_email: assigneeEmail },
       ),
     createTicket: (payload: IntakeRequest) => postJson<IntakeResponse>("/intake", payload),
     createTicketViaWebhook: (payload: IntakeRequest, notificationEmail?: string) => {

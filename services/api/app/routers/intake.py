@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Literal, Optional
 
 from app.core.auth import require_api_key
+from app.core.rbac import require_operator_role
 from app.db.session import get_conn
 from app.db.events import log_event  # NEW
 
@@ -54,7 +55,7 @@ def _next_ticket_id(conn) -> str:
     return f"TCK-{ymd}-{new_seq:04d}"
 
 @router.post("/intake", response_model=IntakeResponse)
-def intake(req: IntakeRequest):
+def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
     with get_conn() as conn:
         conn.autocommit = False
         try:
