@@ -3,6 +3,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
@@ -12,6 +13,7 @@ from app.db.session import DatabaseConnectionError, DatabaseNotConfiguredError
 from app.routers.events import router as events_router
 from app.routers.health import router as health_router
 from app.routers.intake import router as intake_router
+from app.routers.routes import router as routes_router
 from app.routers.tickets import router as tickets_router
 
 settings = get_settings()
@@ -19,6 +21,14 @@ configure_logging(settings.log_level)
 logger = logging.getLogger("app.request")
 
 app = FastAPI(title=settings.app_name)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -86,4 +96,5 @@ def handle_db_unavailable(request: Request, exc: DatabaseConnectionError):
 app.include_router(intake_router)
 app.include_router(tickets_router)
 app.include_router(events_router)
+app.include_router(routes_router)
 app.include_router(health_router)

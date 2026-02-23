@@ -215,7 +215,50 @@ Esempio:
 
 `RATE_LIMIT_RPM=120`
 
+## CORS (UI locale)
+
+Per frontend in locale su `http://localhost:5173`, API usa:
+
+`CORS_ALLOWED_ORIGINS=http://localhost:5173`
+
 ## Tracciabilità richieste
 
 Ogni risposta API include header `X-Request-ID`.
 Se il client invia `X-Request-ID`, il valore viene mantenuto nella risposta.
+
+## UI (Operations Console)
+
+Avvio locale frontend:
+
+```powershell
+cd services/web
+npm install
+npm run dev
+```
+
+Oppure full stack via Docker Compose:
+
+```powershell
+docker compose up -d web
+```
+
+UI default: `http://localhost:5173`
+
+Modalita' intake dalla UI:
+- `VITE_INTAKE_MODE=webhook` (raccomandata): la creazione ticket passa da n8n e attiva le notifiche email/automation.
+- `VITE_INTAKE_MODE=api`: la UI chiama direttamente `/intake` sull'API, utile per debug ma senza passare dal workflow n8n.
+
+Webhook default usato dalla UI:
+`VITE_WEBHOOK_URL=http://localhost:5678/webhook/ticket-intake`
+
+Gestione destinatari email (nuovo):
+- `GET /tenant-email-history?tenant_id=<id>`: ritorna storico email (requester storici + route correnti).
+- `GET /tenant-routes/{tenant_id}`: legge la route email attiva per tenant.
+- `PATCH /tenant-routes/{tenant_id}` con body `{"to_emails":["ops@azienda.it"]}`: aggiorna il destinatario di notifica usato dal workflow.
+
+Nella UI puoi ora scegliere il destinatario da storico (o inserirne uno nuovo) prima di creare il ticket in modalita' `webhook`.
+
+Modalita' enterprise consigliata:
+- non aggiornare la route globale del tenant a ogni ticket;
+- passa il destinatario nel payload webhook (`notification.to_emails`) e risolvilo nel workflow n8n con fallback alla route tenant.
+- guida operativa: `n8n/docs/enterprise_recipient_override.md`
