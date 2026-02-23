@@ -1,12 +1,13 @@
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Literal, List
 
+from app.core.auth import require_api_key
 from app.db.session import get_conn
 from app.db.events import log_event
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 Status = Literal["OPEN", "CLOSED"]
 Priority = Literal["P1", "P2", "P3", "P4"]

@@ -9,6 +9,7 @@ class Settings:
     log_level: str
     database_url: str
     db_connect_timeout_seconds: int
+    api_key: str
 
 
 @lru_cache(maxsize=1)
@@ -18,4 +19,5 @@ def get_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         database_url=os.getenv("DATABASE_URL", ""),
         db_connect_timeout_seconds=int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "5")),
+        api_key=os.getenv("API_KEY", ""),
     )

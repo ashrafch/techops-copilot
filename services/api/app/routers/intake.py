@@ -1,12 +1,13 @@
 from datetime import date, datetime
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, EmailStr, Field
 from typing import Literal, Optional
 
+from app.core.auth import require_api_key
 from app.db.session import get_conn
 from app.db.events import log_event  # NEW
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 Priority = Literal["P1", "P2", "P3", "P4"]
 

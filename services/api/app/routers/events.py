@@ -1,12 +1,13 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Literal
 from datetime import datetime
 import json
 
+from app.core.auth import require_api_key
 from app.db.session import get_conn
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 EventType = Literal["CREATED", "EMAIL_SENT", "CLOSED", "NOTE"]
 

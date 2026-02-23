@@ -194,3 +194,11 @@ Il test avvia `postgres_app`, `minio`, `api` e valida:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/test_api.ps1
 ```
+
+## Sicurezza API (opzionale)
+
+Se imposti `API_KEY` nell'ambiente API, gli endpoint business richiedono header:
+
+`X-API-Key: <API_KEY>`
+
+Endpoint sempre pubblici: `/health`, `/ready`.

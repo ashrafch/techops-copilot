@@ -1,5 +1,6 @@
 param(
-  [string]$PytestArgs = "app/tests -q"
+  [string]$PytestArgs = "app/tests -q",
+  [string]$ApiKey = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,4 +12,4 @@ Write-Output "Building API image..."
 docker compose build api | Out-Null
 
 Write-Output "Running API tests..."
-docker compose run --rm -w /app -e PYTHONPATH=/app api sh -lc "pytest $PytestArgs"
+docker compose run --rm -w /app -e PYTHONPATH=/app -e API_KEY=$ApiKey api sh -lc "pytest $PytestArgs"
