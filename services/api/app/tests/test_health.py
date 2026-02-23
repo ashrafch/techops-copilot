@@ -10,6 +10,7 @@ def test_health_returns_ok():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert response.headers.get("X-Request-ID")
 
 
 def test_health_does_not_require_database_url(monkeypatch):
@@ -22,3 +23,11 @@ def test_health_does_not_require_database_url(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     get_settings.cache_clear()
+
+
+def test_health_echoes_request_id_header():
+    client = TestClient(app)
+    response = client.get("/health", headers={"X-Request-ID": "req-health-123"})
+
+    assert response.status_code == 200
+    assert response.headers.get("X-Request-ID") == "req-health-123"

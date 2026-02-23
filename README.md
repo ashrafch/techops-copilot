@@ -202,3 +202,8 @@ Se imposti `API_KEY` nell'ambiente API, gli endpoint business richiedono header:
 `X-API-Key: <API_KEY>`
 
 Endpoint sempre pubblici: `/health`, `/ready`.
+
+## Tracciabilità richieste
+
+Ogni risposta API include header `X-Request-ID`.
+Se il client invia `X-Request-ID`, il valore viene mantenuto nella risposta.

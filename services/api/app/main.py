@@ -1,3 +1,7 @@
+import logging
+import time
+import uuid
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -11,18 +15,48 @@ from app.routers.tickets import router as tickets_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
+logger = logging.getLogger("app.request")
 
 app = FastAPI(title=settings.app_name)
 
 
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request_id=%s method=%s path=%s status=%s duration_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
+
 @app.exception_handler(DatabaseNotConfiguredError)
-def handle_db_not_configured(_: Request, exc: DatabaseNotConfiguredError):
-    return JSONResponse(status_code=503, content={"detail": str(exc)})
+def handle_db_not_configured(request: Request, exc: DatabaseNotConfiguredError):
+    request_id = getattr(request.state, "request_id", "")
+    response = JSONResponse(status_code=503, content={"detail": str(exc)})
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.exception_handler(DatabaseConnectionError)
-def handle_db_unavailable(_: Request, exc: DatabaseConnectionError):
-    return JSONResponse(status_code=503, content={"detail": str(exc)})
+def handle_db_unavailable(request: Request, exc: DatabaseConnectionError):
+    request_id = getattr(request.state, "request_id", "")
+    response = JSONResponse(status_code=503, content={"detail": str(exc)})
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 app.include_router(intake_router)

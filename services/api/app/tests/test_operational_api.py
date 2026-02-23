@@ -32,4 +32,5 @@ def test_db_endpoint_returns_503_when_database_url_missing(monkeypatch):
     response = client.get("/tickets", params={"tenant_id": "demo"})
     assert response.status_code == 503
     assert response.json()["detail"] == "DATABASE_URL not set"
+    assert response.headers.get("X-Request-ID")
     get_settings.cache_clear()
