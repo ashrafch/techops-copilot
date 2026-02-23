@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Literal, Optional
 
 from app.db.session import get_conn
+from app.db.events import log_event  # NEW
 
 router = APIRouter()
 
@@ -79,6 +80,21 @@ def intake(req: IntakeRequest):
                         now, now
                     ),
                 )
+
+            # NEW: log evento "CREATED"
+            log_event(
+                conn=conn,
+                ticket_id=ticket_id,
+                event_type="CREATED",
+                message="Ticket created via intake",
+                meta={
+                    "tenant_id": req.tenant_id,
+                    "source": req.source,
+                    "priority": req.priority,
+                    "requester": {"name": req.requester.name, "email": str(req.requester.email)},
+                    "machine": {"line": req.machine.line, "station": req.machine.station, "serial": req.machine.serial},
+                },
+            )
 
             conn.commit()
             return IntakeResponse(ticket_id=ticket_id, status="OPEN")

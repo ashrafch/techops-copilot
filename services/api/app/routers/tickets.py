@@ -3,7 +3,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Literal, List
 
-from app.db import get_conn
+from app.db.session import get_conn
+from app.db.events import log_event
 
 router = APIRouter()
 
@@ -117,8 +118,18 @@ def close_ticket(ticket_id: str):
                 if cur.rowcount == 0:
                     conn.rollback()
                     raise HTTPException(status_code=404, detail="Ticket not found")
+
+            # log evento CLOSED nella stessa transaction
+            log_event(
+                conn,
+                ticket_id=ticket_id,
+                event_type="CLOSED",
+                message="Ticket closed",
+                meta={},
+            )
+
             conn.commit()
             return {"ticket_id": ticket_id, "status": "CLOSED"}
-        except Exception as e:
+        except:
             conn.rollback()
             raise
