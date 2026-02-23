@@ -22,6 +22,7 @@ function App() {
   const [tenantId, setTenantId] = useState("demo");
   const [statusFilter, setStatusFilter] = useState("OPEN");
   const [selectedTicketId, setSelectedTicketId] = useState<string>("");
+  const [searchText, setSearchText] = useState("");
 
   const queryClient = useQueryClient();
   const api = useMemo(() => createApiClient({ baseUrl, apiKey }), [baseUrl, apiKey]);
@@ -63,6 +64,17 @@ function App() {
   });
 
   const rows = tickets.data ?? [];
+  const filteredRows = rows.filter((ticket) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      ticket.ticket_id.toLowerCase().includes(q) ||
+      ticket.subject.toLowerCase().includes(q) ||
+      ticket.requester_name.toLowerCase().includes(q)
+    );
+  });
+  const openCount = rows.filter((t) => t.status === "OPEN").length;
+  const closedCount = rows.filter((t) => t.status === "CLOSED").length;
 
   return (
     <div className="page-shell">
@@ -106,11 +118,35 @@ function App() {
             <option value="ALL">ALL</option>
           </select>
         </label>
+        <label>
+          Search
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="ID, subject, requester"
+          />
+        </label>
+        <label>
+          Actions
+          <button
+            className="secondary-button"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["tickets"] })}
+          >
+            Refresh Inbox
+          </button>
+        </label>
       </section>
 
       <main className="content-grid">
         <section className="card list-card">
-          <h2>Ticket Inbox</h2>
+          <div className="list-head">
+            <h2>Ticket Inbox</h2>
+            <div className="kpi-row">
+              <span>Open: {openCount}</span>
+              <span>Closed: {closedCount}</span>
+              <span>Total: {rows.length}</span>
+            </div>
+          </div>
           {tickets.isLoading && <p>Loading tickets...</p>}
           {tickets.isError && <p className="error">{getErrorMessage(tickets.error)}</p>}
           {!tickets.isLoading && !tickets.isError && (
@@ -125,7 +161,7 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((ticket: Ticket) => (
+                {filteredRows.map((ticket: Ticket) => (
                   <tr
                     key={ticket.ticket_id}
                     className={ticket.ticket_id === selectedTicketId ? "selected" : ""}
