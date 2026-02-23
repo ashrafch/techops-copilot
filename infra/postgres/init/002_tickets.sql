@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   ticket_id TEXT UNIQUE NOT NULL,
 
   tenant_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'OPEN',
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED')),
 
   subject TEXT NOT NULL,
-  priority TEXT NOT NULL,  -- P1..P4
+  priority TEXT NOT NULL CHECK (priority IN ('P1', 'P2', 'P3', 'P4')),  -- P1..P4
   description_raw TEXT NOT NULL,
 
   requester_name TEXT NOT NULL,

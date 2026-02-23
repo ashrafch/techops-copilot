@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS ticket_events (
   id BIGSERIAL PRIMARY KEY,
   ticket_id TEXT NOT NULL REFERENCES tickets(ticket_id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL, -- es: CREATED, EMAIL_SENT, CLOSED, NOTE
+  event_type TEXT NOT NULL CHECK (event_type IN ('CREATED', 'EMAIL_SENT', 'CLOSED', 'NOTE')),
   message TEXT NOT NULL DEFAULT '',
   meta JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()

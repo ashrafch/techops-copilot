@@ -1,15 +1,31 @@
-import os
 import psycopg
 from contextlib import contextmanager
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+from app.core.config import get_settings
 
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL not set")
+
+class DatabaseNotConfiguredError(RuntimeError):
+    pass
+
+
+class DatabaseConnectionError(RuntimeError):
+    pass
+
 
 @contextmanager
 def get_conn():
-    conn = psycopg.connect(DATABASE_URL)
+    settings = get_settings()
+    if not settings.database_url:
+        raise DatabaseNotConfiguredError("DATABASE_URL not set")
+
+    try:
+        conn = psycopg.connect(
+            settings.database_url,
+            connect_timeout=settings.db_connect_timeout_seconds,
+        )
+    except psycopg.Error as exc:
+        raise DatabaseConnectionError("Database unavailable") from exc
+
     try:
         yield conn
     finally:

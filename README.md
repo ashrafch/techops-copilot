@@ -172,3 +172,25 @@ JavaScript (workflow logic)
 📌 Nota
 
 Il progetto è pensato come base per un prodotto B2B, non come semplice automazione isolata.
+
+## Smoke test rapido (obbligatorio dopo modifiche)
+
+Per verificare avvio applicativo e flusso ticket end-to-end:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/smoke_e2e.ps1
+```
+
+Il test avvia `postgres_app`, `minio`, `api` e valida:
+- `/health`
+- `/ready`
+- creazione ticket (`/intake`)
+- lettura ticket (`/tickets/{ticket_id}`)
+- timeline eventi (`/tickets/{ticket_id}/events`)
+- chiusura ticket (`/tickets/{ticket_id}/close`)
+
+## Test API (suite rapida)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/test_api.ps1
+```

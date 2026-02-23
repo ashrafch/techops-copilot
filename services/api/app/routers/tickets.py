@@ -112,12 +112,23 @@ def close_ticket(ticket_id: str):
                     UPDATE tickets
                     SET status = 'CLOSED', updated_at = NOW()
                     WHERE ticket_id = %s
+                      AND status <> 'CLOSED'
                     """,
                     (ticket_id,),
                 )
+
                 if cur.rowcount == 0:
-                    conn.rollback()
-                    raise HTTPException(status_code=404, detail="Ticket not found")
+                    cur.execute(
+                        "SELECT status FROM tickets WHERE ticket_id = %s",
+                        (ticket_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        conn.rollback()
+                        raise HTTPException(status_code=404, detail="Ticket not found")
+                    if row[0] == "CLOSED":
+                        conn.commit()
+                        return {"ticket_id": ticket_id, "status": "CLOSED"}
 
             # log evento CLOSED nella stessa transaction
             log_event(
@@ -130,6 +141,6 @@ def close_ticket(ticket_id: str):
 
             conn.commit()
             return {"ticket_id": ticket_id, "status": "CLOSED"}
-        except:
+        except Exception:
             conn.rollback()
             raise

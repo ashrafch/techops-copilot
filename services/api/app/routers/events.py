@@ -56,7 +56,7 @@ def create_event(payload: EventCreate):
 
             conn.commit()
             return {"ok": True, "event_id": event_id}
-        except:
+        except Exception:
             conn.rollback()
             raise
 
