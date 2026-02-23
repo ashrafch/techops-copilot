@@ -201,7 +201,19 @@ Se imposti `API_KEY` nell'ambiente API, gli endpoint business richiedono header:
 
 `X-API-Key: <API_KEY>`
 
+Per forzare la policy anche se `API_KEY` non è ancora valorizzata:
+
+`REQUIRE_API_KEY=true`
+
 Endpoint sempre pubblici: `/health`, `/ready`.
+
+## Rate limiting (opzionale)
+
+`RATE_LIMIT_RPM` limita richieste/minuto per IP+path sugli endpoint business.
+
+Esempio:
+
+`RATE_LIMIT_RPM=120`
 
 ## Tracciabilità richieste
 

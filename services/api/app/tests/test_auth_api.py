@@ -18,6 +18,7 @@ def _intake_payload():
 
 def test_no_api_key_config_keeps_endpoints_open(monkeypatch):
     monkeypatch.setenv("API_KEY", "")
+    monkeypatch.setenv("REQUIRE_API_KEY", "false")
     get_settings.cache_clear()
     client = TestClient(app)
 
@@ -28,6 +29,7 @@ def test_no_api_key_config_keeps_endpoints_open(monkeypatch):
 
 def test_api_key_required_when_configured(monkeypatch):
     monkeypatch.setenv("API_KEY", "super-secret")
+    monkeypatch.setenv("REQUIRE_API_KEY", "false")
     get_settings.cache_clear()
     client = TestClient(app)
 
@@ -54,6 +56,7 @@ def test_api_key_required_when_configured(monkeypatch):
 
 def test_health_stays_public_with_api_key(monkeypatch):
     monkeypatch.setenv("API_KEY", "super-secret")
+    monkeypatch.setenv("REQUIRE_API_KEY", "false")
     get_settings.cache_clear()
     client = TestClient(app)
 
@@ -62,4 +65,16 @@ def test_health_stays_public_with_api_key(monkeypatch):
 
     assert health.status_code == 200
     assert ready.status_code == 200
+    get_settings.cache_clear()
+
+
+def test_require_api_key_without_secret_returns_503(monkeypatch):
+    monkeypatch.setenv("REQUIRE_API_KEY", "true")
+    monkeypatch.setenv("API_KEY", "")
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    response = client.post("/intake", json=_intake_payload())
+    assert response.status_code == 503
+    assert response.json()["detail"] == "API auth not configured"
     get_settings.cache_clear()
