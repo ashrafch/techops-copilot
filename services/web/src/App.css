@@ -143,6 +143,11 @@
   font-size: 0.83rem;
 }
 
+.hint {
+  color: #5e6f7f;
+  font-size: 0.78rem;
+}
+
 .create-form input,
 .create-form select,
 .create-form textarea {

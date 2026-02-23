@@ -298,7 +298,7 @@ function App() {
           <h2>Create Ticket</h2>
           <form className="create-form" onSubmit={submitCreateTicket}>
             <label className="full-row">
-              Notification Email
+              Notification Email (destinatario notifica)
               <input
                 type="email"
                 list="notification-email-history"
@@ -306,6 +306,9 @@ function App() {
                 onChange={(e) => setNotificationEmail(e.target.value)}
                 placeholder="Select or type destination email"
               />
+              <small className="hint">
+                Questa email riceve la notifica. Il campo Requester Email identifica chi apre il ticket.
+              </small>
               <datalist id="notification-email-history">
                 {emailHistory.map((email) => (
                   <option key={email} value={email} />
@@ -322,7 +325,7 @@ function App() {
               />
             </label>
             <label>
-              Requester Email
+              Requester Email (autore ticket)
               <input
                 type="email"
                 value={createForm.requesterEmail}
