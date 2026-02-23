@@ -3,6 +3,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
@@ -19,6 +20,14 @@ configure_logging(settings.log_level)
 logger = logging.getLogger("app.request")
 
 app = FastAPI(title=settings.app_name)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")

@@ -1,0 +1,219 @@
+:root {
+  --bg-top: #f4f8ff;
+  --bg-bottom: #eef4ea;
+  --text: #1d2a38;
+  --muted: #5e6f7f;
+  --card: #ffffff;
+  --line: #d6dee8;
+  --accent: #0c6a5a;
+  --accent-soft: #dcf3ee;
+  --danger: #b5393f;
+}
+
+.page-shell {
+  min-height: 100vh;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 0% 0%, #d9e6ff 0, transparent 40%),
+    radial-gradient(circle at 100% 100%, #ddf5de 0, transparent 35%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  padding: 2rem;
+  font-family: "Segoe UI Variable", "Trebuchet MS", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+.status-grid {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.status-chip {
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 0.85rem;
+}
+
+.status-chip.ok {
+  background: var(--accent-soft);
+  border-color: #95dac8;
+}
+
+.status-chip.fail {
+  background: #fde9ea;
+  border-color: #efc0c3;
+}
+
+.control-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.2rem;
+}
+
+.control-panel label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  color: var(--muted);
+  gap: 0.3rem;
+}
+
+.control-panel input,
+.control-panel select {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.95rem;
+  background: #fff;
+  color: var(--text);
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 6px 24px rgba(22, 42, 64, 0.08);
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #edf1f6;
+  padding: 0.55rem 0.4rem;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr:hover {
+  background: #f7fafc;
+}
+
+tbody tr.selected {
+  background: #e8f3ff;
+}
+
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.detail-head button {
+  border: none;
+  background: var(--accent);
+  color: white;
+  padding: 0.55rem 0.8rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.detail-head button:disabled {
+  background: #95a6b6;
+  cursor: not-allowed;
+}
+
+.detail-meta p {
+  margin: 0.25rem 0;
+  color: #33455a;
+  font-size: 0.9rem;
+}
+
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.timeline li {
+  border: 1px solid #e7edf4;
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  background: #fbfdff;
+}
+
+.timeline li div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.timeline li span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.timeline li p {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 980px) {
+  .control-panel {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
+
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-shell {
+    padding: 1rem;
+  }
+
+  .topbar {
+    flex-direction: column;
+  }
+
+  .control-panel {
+    grid-template-columns: 1fr;
+  }
+}

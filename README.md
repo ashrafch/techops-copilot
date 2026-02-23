@@ -215,7 +215,31 @@ Esempio:
 
 `RATE_LIMIT_RPM=120`
 
+## CORS (UI locale)
+
+Per frontend in locale su `http://localhost:5173`, API usa:
+
+`CORS_ALLOWED_ORIGINS=http://localhost:5173`
+
 ## Tracciabilità richieste
 
 Ogni risposta API include header `X-Request-ID`.
 Se il client invia `X-Request-ID`, il valore viene mantenuto nella risposta.
+
+## UI (Operations Console)
+
+Avvio locale frontend:
+
+```powershell
+cd services/web
+npm install
+npm run dev
+```
+
+Oppure full stack via Docker Compose:
+
+```powershell
+docker compose up -d web
+```
+
+UI default: `http://localhost:5173`
