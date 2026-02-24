@@ -497,6 +497,18 @@ function App() {
   const page = Math.min(currentPage, totalPages);
   const pageStart = (page - 1) * pageSize;
   const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize);
+  const viewTitle =
+    resolvedView === "operations"
+      ? "Operations Center"
+      : resolvedView === "kpi"
+        ? "KPI Dashboard"
+        : "Admin Workspace";
+  const viewSubtitle =
+    resolvedView === "operations"
+      ? "Gestisci ticket, assegnazioni e avanzamento operativo in tempo reale."
+      : resolvedView === "kpi"
+        ? "Monitora volumi, performance e priorita per decisioni rapide."
+        : "Configura governance, utenti e policy tenant in modo ordinato.";
 
   function handleLogout() {
     clearAuth();
@@ -583,6 +595,10 @@ function App() {
             Admin Workspace
           </button>
         )}
+      </section>
+      <section className="card view-header">
+        <h2>{viewTitle}</h2>
+        <p className="subtitle">{viewSubtitle}</p>
       </section>
 
       {resolvedView !== "admin" && (
@@ -998,6 +1014,7 @@ function App() {
       {resolvedView === "kpi" && (
         <section className="card analytics-card">
           <h2>Operational KPI Dashboard</h2>
+          <p className="subtitle">Vista sintetica delle metriche operative del tenant selezionato.</p>
           <div className="analytics-grid">
             <div><span>Created last 24h</span><strong>{ticketMetrics.data?.created_last_24h ?? "-"}</strong></div>
             <div><span>Closed last 24h</span><strong>{ticketMetrics.data?.closed_last_24h ?? "-"}</strong></div>
@@ -1016,7 +1033,10 @@ function App() {
       {resolvedView === "admin" && isAdminUser && (
         <section className="card admin-panel">
           <div className="admin-head">
-            <h2>Admin Workspace</h2>
+            <div>
+              <h2>Admin Workspace</h2>
+              <p className="subtitle">Ogni sezione e separata per ridurre errore operativo e confusione.</p>
+            </div>
             <div className="admin-nav">
               <button className={adminSection === "users" ? "view-button active" : "view-button"} onClick={() => setAdminSection("users")}>Users</button>
               <button className={adminSection === "routing" ? "view-button active" : "view-button"} onClick={() => setAdminSection("routing")}>Routing</button>
@@ -1127,6 +1147,9 @@ function App() {
 
                 {adminUsers.isLoading && <p>Loading users...</p>}
                 {adminUsers.isError && <p className="error">{getErrorMessage(adminUsers.error)}</p>}
+                {!adminUsers.isLoading && !adminUsers.isError && !adminUsers.data?.length && (
+                  <p className="subtitle">Nessun utente trovato per questo tenant.</p>
+                )}
                 {!!adminUsers.data?.length && (
                   <table className="admin-users-table">
                     <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th><th>Password Reset</th></tr></thead>
@@ -1170,6 +1193,9 @@ function App() {
                 <h3>Recent Admin Audit</h3>
                 {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
                 {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
+                {!adminAuditLogs.isLoading && !adminAuditLogs.isError && !adminAuditLogs.data?.length && (
+                  <p className="subtitle">Nessun evento audit disponibile.</p>
+                )}
                 {!!adminAuditLogs.data?.length && (
                   <table className="admin-users-table">
                     <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
