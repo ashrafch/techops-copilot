@@ -120,6 +120,26 @@ class ProactiveSummaryOut(BaseModel):
     next_best_actions: list[ProactiveActionOut]
 
 
+class MemoryImpactOut(BaseModel):
+    tenant_id: str
+    window_days: int
+    avg_score_recent: float
+    avg_score_previous: float
+    delta_score: float
+    entries_recent: int
+    entries_previous: int
+    top_event_types: list[dict[str, object]]
+
+
+class ExplainabilityOut(BaseModel):
+    tenant_id: str
+    window_days: int
+    auto_executed: int
+    pending_review: int
+    duplicate_avoided: int
+    top_reasons: list[dict[str, object]]
+
+
 class PendingDecisionOut(BaseModel):
     id: int
     tenant_id: str
@@ -1121,6 +1141,124 @@ def proactive_summary(
         predicted_breach_2h=predicted_breach_2h,
         unassigned_open=unassigned_open,
         next_best_actions=actions,
+    )
+
+
+@router.get("/memory/impact", response_model=MemoryImpactOut)
+def memory_impact(
+    tenant_id: str = Query(..., min_length=1),
+    days: int = Query(30, ge=7, le=90),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*), COALESCE(AVG(outcome_score), 0)
+            FROM agent_memory_feedback
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+            """,
+            (tenant_id, days),
+        )
+        recent_count, recent_avg = cur.fetchone()
+        cur.execute(
+            """
+            SELECT COUNT(*), COALESCE(AVG(outcome_score), 0)
+            FROM agent_memory_feedback
+            WHERE tenant_id = %s
+              AND created_at < NOW() - (%s::text || ' days')::interval
+              AND created_at >= NOW() - ((%s * 2)::text || ' days')::interval
+            """,
+            (tenant_id, days, days),
+        )
+        prev_count, prev_avg = cur.fetchone()
+        cur.execute(
+            """
+            SELECT event_type, COUNT(*) AS cnt, COALESCE(AVG(outcome_score), 0) AS avg_score
+            FROM agent_memory_feedback
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+            GROUP BY event_type
+            ORDER BY cnt DESC, avg_score DESC
+            LIMIT 5
+            """,
+            (tenant_id, days),
+        )
+        top_rows = cur.fetchall()
+
+    avg_recent = round(float(recent_avg or 0), 2)
+    avg_prev = round(float(prev_avg or 0), 2)
+    return MemoryImpactOut(
+        tenant_id=tenant_id,
+        window_days=days,
+        avg_score_recent=avg_recent,
+        avg_score_previous=avg_prev,
+        delta_score=round(avg_recent - avg_prev, 2),
+        entries_recent=int(recent_count or 0),
+        entries_previous=int(prev_count or 0),
+        top_event_types=[
+            {"event_type": row[0], "count": int(row[1]), "avg_score": round(float(row[2] or 0), 2)}
+            for row in top_rows
+        ],
+    )
+
+
+@router.get("/explainability", response_model=ExplainabilityOut)
+def explainability_summary(
+    tenant_id: str = Query(..., min_length=1),
+    days: int = Query(30, ge=7, le=90),
+    limit: int = Query(5, ge=1, le=20),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT decision, reason, COUNT(*) AS cnt
+            FROM agent_decision_logs
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+            GROUP BY decision, reason
+            ORDER BY cnt DESC
+            """,
+            (tenant_id, days),
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_pending_decisions
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+              AND status = 'PENDING'
+            """,
+            (tenant_id, days),
+        )
+        pending_count = int(cur.fetchone()[0] or 0)
+
+    auto_executed = 0
+    duplicate_avoided = 0
+    reason_map: dict[str, int] = {}
+    for decision, reason, cnt in rows:
+        count = int(cnt or 0)
+        if str(decision) in {"CREATED", "CORRELATED"}:
+            auto_executed += count
+        if str(decision) == "DUPLICATE":
+            duplicate_avoided += count
+        business_reason = str(reason or "").replace("_", " ").replace(":", " - ").strip()
+        if not business_reason:
+            business_reason = "standard policy routing"
+        reason_map[business_reason] = reason_map.get(business_reason, 0) + count
+
+    top_reasons = sorted(reason_map.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return ExplainabilityOut(
+        tenant_id=tenant_id,
+        window_days=days,
+        auto_executed=auto_executed,
+        pending_review=pending_count,
+        duplicate_avoided=duplicate_avoided,
+        top_reasons=[{"reason": reason, "count": count} for reason, count in top_reasons],
     )
 
 

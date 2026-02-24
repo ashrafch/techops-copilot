@@ -357,3 +357,39 @@ def test_playbook_catalog_create_and_list():
     listed = client.get("/automation/playbooks", params={"tenant_id": "demo", "event_type": event_type, "limit": 20})
     assert listed.status_code == 200
     assert any(item["event_type"] == event_type for item in listed.json())
+
+
+def test_memory_impact_and_explainability_endpoints():
+    client = TestClient(app)
+    payload = _trigger_payload(
+        event_id=f"evt-{uuid4().hex[:8]}",
+        event_type="CONVEYOR_JAM",
+        severity="high",
+        asset_id=f"CONV-{uuid4().hex[:6]}",
+    )
+    create = client.post("/automation/external-intake", json=payload)
+    assert create.status_code == 200
+    ticket_id = create.json()["ticket_id"]
+
+    feedback = client.post(
+        "/automation/memory/feedback",
+        json={
+            "tenant_id": "demo",
+            "ticket_id": ticket_id,
+            "event_type": "CONVEYOR_JAM",
+            "asset_id": payload["asset_id"],
+            "outcome_score": 4,
+            "resolution_note": "Use standard conveyor recovery sequence.",
+        },
+    )
+    assert feedback.status_code == 200
+
+    impact = client.get("/automation/memory/impact", params={"tenant_id": "demo", "days": 30})
+    assert impact.status_code == 200
+    assert "avg_score_recent" in impact.json()
+    assert "top_event_types" in impact.json()
+
+    explain = client.get("/automation/explainability", params={"tenant_id": "demo", "days": 30, "limit": 5})
+    assert explain.status_code == 200
+    assert "auto_executed" in explain.json()
+    assert "top_reasons" in explain.json()

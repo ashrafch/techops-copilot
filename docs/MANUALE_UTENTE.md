@@ -239,6 +239,7 @@ Controlla:
 - **Onboarding guidato**: al primo accesso compare un wizard in 4 step per configurare rapidamente tenant, ticket test e policy AI.
 - **Notification center in-app**: nella card dettaglio trovi segnalazioni immediate (SLA breached/at risk e decisioni AI pending).
 - **Executive report KPI**: nella vista Performance trovi SLA attainment, MTTR, copertura automazione, ore risparmiate e stima impatto economico.
+- **AI Value Snapshot**: nella vista Performance trovi quality delta del memory loop (recente vs periodo precedente) e explainability sintetica business-side.
 - **Human-in-the-loop**: in Admin > Automation puoi approvare/rifiutare decisioni AI sotto soglia.
 - **Catalogo playbook versionato**: in Admin > Automation puoi creare playbook per evento/severità con versione controllata.
 - **Localizzazione IT/EN**: pulsante lingua in header per passare rapidamente tra italiano e inglese.

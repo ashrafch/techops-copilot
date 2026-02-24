@@ -275,6 +275,26 @@ export interface AgentPlaybook {
   created_at: string;
 }
 
+export interface AgentMemoryImpact {
+  tenant_id: string;
+  window_days: number;
+  avg_score_recent: number;
+  avg_score_previous: number;
+  delta_score: number;
+  entries_recent: number;
+  entries_previous: number;
+  top_event_types: Array<{ event_type: string; count: number; avg_score: number }>;
+}
+
+export interface AgentExplainability {
+  tenant_id: string;
+  window_days: number;
+  auto_executed: number;
+  pending_review: number;
+  duplicate_avoided: number;
+  top_reasons: Array<{ reason: string; count: number }>;
+}
+
 interface ApiClientOptions {
   baseUrl: string;
   apiKey?: string;
@@ -504,6 +524,14 @@ export function createApiClient(options: ApiClientOptions) {
     listAgentPlaybooks: (tenantId: string, eventType = "", limit = 200) =>
       getJson<AgentPlaybook[]>(
         `/automation/playbooks?tenant_id=${encodeURIComponent(tenantId)}&event_type=${encodeURIComponent(eventType)}&limit=${limit}`,
+      ),
+    getAgentMemoryImpact: (tenantId: string, days = 30) =>
+      getJson<AgentMemoryImpact>(
+        `/automation/memory/impact?tenant_id=${encodeURIComponent(tenantId)}&days=${days}`,
+      ),
+    getAgentExplainability: (tenantId: string, days = 30, limit = 5) =>
+      getJson<AgentExplainability>(
+        `/automation/explainability?tenant_id=${encodeURIComponent(tenantId)}&days=${days}&limit=${limit}`,
       ),
     createAgentPlaybook: (payload: {
       tenant_id: string;

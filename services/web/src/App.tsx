@@ -349,6 +349,16 @@ function App() {
     queryFn: () => api.listAgentActions(tenantId, 50),
     enabled: !enforceAuth || Boolean(accessToken),
   });
+  const agentMemoryImpact = useQuery({
+    queryKey: ["agent-memory-impact", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getAgentMemoryImpact(tenantId, 30),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentExplainability = useQuery({
+    queryKey: ["agent-explainability", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getAgentExplainability(tenantId, 30, 5),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
   const executiveReport = useQuery({
     queryKey: ["executive-report", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.getExecutiveReport(tenantId, 30),
@@ -1519,6 +1529,51 @@ function App() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </section>
+          <section className="card automation-card">
+            <h3>AI Value Snapshot</h3>
+            {agentMemoryImpact.isLoading && <p>Calcolo memory impact...</p>}
+            {agentMemoryImpact.isError && <p className="error">{getErrorMessage(agentMemoryImpact.error)}</p>}
+            {agentMemoryImpact.data && (
+              <div className="analytics-grid">
+                <div><span>Recent avg score</span><strong>{agentMemoryImpact.data.avg_score_recent}</strong></div>
+                <div><span>Previous avg score</span><strong>{agentMemoryImpact.data.avg_score_previous}</strong></div>
+                <div><span>Delta</span><strong>{agentMemoryImpact.data.delta_score}</strong></div>
+                <div><span>Recent feedback</span><strong>{agentMemoryImpact.data.entries_recent}</strong></div>
+              </div>
+            )}
+            {agentExplainability.isLoading && <p>Calcolo explainability...</p>}
+            {agentExplainability.isError && <p className="error">{getErrorMessage(agentExplainability.error)}</p>}
+            {agentExplainability.data && (
+              <ul className="timeline">
+                <li>
+                  <div>
+                    <strong>Auto executed</strong>
+                    <span>{agentExplainability.data.auto_executed}</span>
+                  </div>
+                </li>
+                <li>
+                  <div>
+                    <strong>Pending review</strong>
+                    <span>{agentExplainability.data.pending_review}</span>
+                  </div>
+                </li>
+                <li>
+                  <div>
+                    <strong>Duplicate avoided</strong>
+                    <span>{agentExplainability.data.duplicate_avoided}</span>
+                  </div>
+                </li>
+                {agentExplainability.data.top_reasons.map((r) => (
+                  <li key={r.reason}>
+                    <div>
+                      <strong>{r.reason}</strong>
+                      <span>{r.count}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
         </div>
