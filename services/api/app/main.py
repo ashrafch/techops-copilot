@@ -11,6 +11,7 @@ from app.core.logging import configure_logging
 from app.core.rate_limit import is_rate_limited
 from app.db.session import DatabaseConnectionError, DatabaseNotConfiguredError
 from app.routers.admin import router as admin_router
+from app.routers.automation import router as automation_router
 from app.routers.auth_router import router as auth_router
 from app.routers.events import router as events_router
 from app.routers.health import router as health_router
@@ -102,3 +103,4 @@ app.include_router(routes_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(automation_router)

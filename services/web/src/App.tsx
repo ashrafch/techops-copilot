@@ -1012,20 +1012,27 @@ function App() {
       )}
 
       {resolvedView === "kpi" && (
-        <section className="card analytics-card">
-          <h2>Operational KPI Dashboard</h2>
-          <p className="subtitle">Vista sintetica delle metriche operative del tenant selezionato.</p>
-          <div className="analytics-grid">
-            <div><span>Created last 24h</span><strong>{ticketMetrics.data?.created_last_24h ?? "-"}</strong></div>
-            <div><span>Closed last 24h</span><strong>{ticketMetrics.data?.closed_last_24h ?? "-"}</strong></div>
-            <div><span>In Progress</span><strong>{ticketMetrics.data?.in_progress_total ?? "-"}</strong></div>
-            <div><span>Waiting</span><strong>{ticketMetrics.data?.waiting_total ?? "-"}</strong></div>
-            <div><span>Resolved</span><strong>{ticketMetrics.data?.resolved_total ?? "-"}</strong></div>
-            <div><span>Closed</span><strong>{ticketMetrics.data?.closed_total ?? "-"}</strong></div>
-            <div><span>Open At Risk</span><strong>{ticketMetrics.data?.at_risk_open_total ?? "-"}</strong></div>
-            <div><span>Open Breached</span><strong>{ticketMetrics.data?.breached_open_total ?? "-"}</strong></div>
-          </div>
-        </section>
+        <div className="analytics-stack">
+          <section className="card analytics-card">
+            <h2>Operational KPI Dashboard</h2>
+            <p className="subtitle">Vista sintetica delle metriche operative del tenant selezionato.</p>
+            <div className="analytics-grid">
+              <div><span>Created last 24h</span><strong>{ticketMetrics.data?.created_last_24h ?? "-"}</strong></div>
+              <div><span>Closed last 24h</span><strong>{ticketMetrics.data?.closed_last_24h ?? "-"}</strong></div>
+              <div><span>In Progress</span><strong>{ticketMetrics.data?.in_progress_total ?? "-"}</strong></div>
+              <div><span>Waiting</span><strong>{ticketMetrics.data?.waiting_total ?? "-"}</strong></div>
+              <div><span>Resolved</span><strong>{ticketMetrics.data?.resolved_total ?? "-"}</strong></div>
+              <div><span>Closed</span><strong>{ticketMetrics.data?.closed_total ?? "-"}</strong></div>
+              <div><span>Open At Risk</span><strong>{ticketMetrics.data?.at_risk_open_total ?? "-"}</strong></div>
+              <div><span>Open Breached</span><strong>{ticketMetrics.data?.breached_open_total ?? "-"}</strong></div>
+            </div>
+          </section>
+          <section className="card automation-card">
+            <h3>AI Agent External Triggers</h3>
+            <p className="subtitle">Endpoint per eventi da WMS/PLC/IoT: creazione e correlazione ticket automatica.</p>
+            <code>POST {baseUrl}/automation/external-intake</code>
+          </section>
+        </div>
       )}
       </>
       )}

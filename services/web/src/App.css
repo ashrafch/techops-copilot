@@ -205,6 +205,11 @@
   margin-top: 0.2rem;
 }
 
+.analytics-stack {
+  display: grid;
+  gap: 0.9rem;
+}
+
 .analytics-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(140px, 1fr));
@@ -233,6 +238,16 @@
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.automation-card code {
+  display: inline-block;
+  margin-top: 0.35rem;
+  background: #f2f6fb;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.85rem;
 }
 
 .admin-head .subtitle {

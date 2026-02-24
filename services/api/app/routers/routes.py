@@ -29,7 +29,7 @@ class TenantRouteUpdate(BaseModel):
 
 
 class EmailHistoryItem(BaseModel):
-    email: EmailStr
+    email: str
     last_used_at: datetime
 
 
@@ -156,6 +156,7 @@ def list_tenant_email_history(
     limit: int = Query(50, ge=1, le=200),
     _: None = Depends(require_viewer_role),
 ):
+    email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -179,11 +180,12 @@ def list_tenant_email_history(
             SELECT email, MAX(last_used_at) AS last_used_at
             FROM merged
             WHERE email <> ''
+              AND email ~ %s
             GROUP BY email
             ORDER BY last_used_at DESC, email ASC
             LIMIT %s
             """,
-            (tenant_id, tenant_id, limit),
+            (tenant_id, tenant_id, email_regex, limit),
         )
         rows = cur.fetchall()
 
