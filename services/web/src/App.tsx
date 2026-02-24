@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   createApiClient,
+  type AgentActionRun,
+  type AgentDecisionLog,
+  type AgentMemorySuggestion,
   type AdminAuditLog,
   type AdminUser,
   type IntakeRequest,
@@ -121,7 +124,12 @@ function App() {
   const [automationAtRiskLead, setAutomationAtRiskLead] = useState("");
   const [automationAssignName, setAutomationAssignName] = useState("");
   const [automationAssignEmail, setAutomationAssignEmail] = useState("");
+  const [automationWebhookUrl, setAutomationWebhookUrl] = useState("");
+  const [automationWebhookToken, setAutomationWebhookToken] = useState("");
   const [slaMonitorResult, setSlaMonitorResult] = useState("");
+  const [memoryScore, setMemoryScore] = useState("4");
+  const [memoryNote, setMemoryNote] = useState("");
+  const [agentError, setAgentError] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState<"admin" | "operator" | "viewer">("operator");
@@ -259,6 +267,41 @@ function App() {
     queryFn: () => api.listAdminAuditLogs(tenantId, 100),
     enabled: isAdminUser && activeView === "admin" && (!enforceAuth || Boolean(accessToken)),
   });
+  const agentProactiveSummary = useQuery({
+    queryKey: ["agent-proactive-summary", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getAgentProactiveSummary(tenantId, 20),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentDecisionLogs = useQuery({
+    queryKey: ["agent-decisions", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentDecisions(tenantId, 50),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentActionRuns = useQuery({
+    queryKey: ["agent-actions", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentActions(tenantId, 50),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentMemorySuggestions = useQuery({
+    queryKey: [
+      "agent-memory-suggestions",
+      baseUrl,
+      apiKey,
+      accessToken,
+      userRole,
+      tenantId,
+      selectedTicket.data?.machine_station ?? "",
+      selectedTicket.data?.machine_serial ?? "",
+    ],
+    queryFn: () =>
+      api.listAgentMemorySuggestions(
+        tenantId,
+        selectedTicket.data?.machine_station ?? "GENERIC_EVENT",
+        selectedTicket.data?.machine_serial ?? "",
+        5,
+      ),
+    enabled: Boolean(selectedTicket.data?.ticket_id) && (!enforceAuth || Boolean(accessToken)),
+  });
 
   const emailHistory = useMemo(() => {
     const fromApi = (tenantEmailHistory.data ?? []).map((item) => item.email.toLowerCase());
@@ -350,6 +393,9 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tenant-email-history"] });
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-proactive-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-actions"] });
       setNotificationEmail("");
       setCreateForm({
         requesterName: "",
@@ -409,6 +455,8 @@ function App() {
         ),
         auto_assign_name: (automationAssignName || tenantAutomationPolicy.data?.auto_assign_name || "").trim(),
         auto_assign_email: (automationAssignEmail || tenantAutomationPolicy.data?.auto_assign_email || "").trim() || null,
+        action_webhook_url: (automationWebhookUrl || tenantAutomationPolicy.data?.action_webhook_url || "").trim(),
+        action_webhook_token: (automationWebhookToken || "").trim(),
       }),
     onSuccess: () => {
       setAdminError("");
@@ -427,8 +475,29 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-proactive-summary"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const memoryFeedbackMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedTicket.data) throw new ApiError("Select a ticket first", 422);
+      return api.addAgentMemoryFeedback({
+        tenant_id: selectedTicket.data.tenant_id,
+        ticket_id: selectedTicket.data.ticket_id,
+        event_type: selectedTicket.data.machine_station || "GENERIC_EVENT",
+        asset_id: selectedTicket.data.machine_serial || "",
+        outcome_score: Number(memoryScore),
+        resolution_note: memoryNote.trim(),
+      });
+    },
+    onSuccess: () => {
+      setAgentError("");
+      setMemoryNote("");
+      queryClient.invalidateQueries({ queryKey: ["agent-memory-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-decisions"] });
+    },
+    onError: (error) => setAgentError(getErrorMessage(error)),
   });
 
   const createAdminUserMutation = useMutation({
@@ -487,6 +556,8 @@ function App() {
     setAutomationAtRiskLead(String(tenantAutomationPolicy.data?.at_risk_lead_minutes ?? 60));
     setAutomationAssignName(tenantAutomationPolicy.data?.auto_assign_name ?? "");
     setAutomationAssignEmail(tenantAutomationPolicy.data?.auto_assign_email ?? "");
+    setAutomationWebhookUrl(tenantAutomationPolicy.data?.action_webhook_url ?? "");
+    setAutomationWebhookToken("");
     setSlaMonitorResult("");
     setAdminError("");
   }
@@ -658,12 +729,12 @@ function App() {
           <strong>{queueSummary.data?.open_total ?? "-"}</strong>
         </article>
         <article className="card quick-card">
-          <span>A rischio SLA</span>
-          <strong>{queueSummary.data?.at_risk_total ?? "-"}</strong>
+          <span>Previsione breach 2h</span>
+          <strong>{agentProactiveSummary.data?.predicted_breach_2h ?? "-"}</strong>
         </article>
         <article className="card quick-card">
-          <span>SLA superato</span>
-          <strong>{queueSummary.data?.breached_total ?? "-"}</strong>
+          <span>A rischio SLA</span>
+          <strong>{queueSummary.data?.at_risk_total ?? "-"}</strong>
         </article>
         <article className="card quick-card">
           <span>Risoluzione media</span>
@@ -1079,6 +1150,47 @@ function App() {
                   </li>
                 ))}
               </ul>
+              <h3>AI Memory Feedback</h3>
+              <div className="inline-form">
+                <select value={memoryScore} onChange={(e) => setMemoryScore(e.target.value)}>
+                  <option value="5">5 - Ottimo esito</option>
+                  <option value="4">4 - Buon esito</option>
+                  <option value="3">3 - Medio</option>
+                  <option value="2">2 - Scarso</option>
+                  <option value="1">1 - Non utile</option>
+                </select>
+                <input
+                  placeholder="Nota di risoluzione da ricordare"
+                  value={memoryNote}
+                  onChange={(e) => setMemoryNote(e.target.value)}
+                />
+                <button
+                  onClick={() => {
+                    if (!memoryNote.trim()) {
+                      setAgentError("Inserisci una nota prima di salvare il feedback AI.");
+                      return;
+                    }
+                    memoryFeedbackMutation.mutate();
+                  }}
+                  disabled={memoryFeedbackMutation.isPending}
+                >
+                  {memoryFeedbackMutation.isPending ? "Salvataggio..." : "Salva memoria"}
+                </button>
+              </div>
+              {agentError && <p className="error">{agentError}</p>}
+              {!!agentMemorySuggestions.data?.length && (
+                <ul className="timeline">
+                  {agentMemorySuggestions.data.map((item: AgentMemorySuggestion) => (
+                    <li key={`${item.ticket_id}-${item.created_at}`}>
+                      <div>
+                        <strong>{item.ticket_id}</strong>
+                        <span>score {item.outcome_score}</span>
+                      </div>
+                      <p>{item.resolution_note || "-"}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           )}
         </section>
@@ -1106,6 +1218,64 @@ function App() {
             <p className="subtitle">
               I trigger esterni (WMS/PLC/IoT) creano o correlano ticket in automatico con policy tenant dedicate.
             </p>
+          </section>
+          <section className="card automation-card">
+            <h3>Next Best Actions</h3>
+            {agentProactiveSummary.isLoading && <p>Calcolo azioni proattive...</p>}
+            {agentProactiveSummary.isError && <p className="error">{getErrorMessage(agentProactiveSummary.error)}</p>}
+            {!agentProactiveSummary.isLoading && !agentProactiveSummary.isError && (
+              <ul className="timeline">
+                {(agentProactiveSummary.data?.next_best_actions ?? []).slice(0, 6).map((item) => (
+                  <li key={item.ticket_id}>
+                    <div>
+                      <strong>{item.ticket_id}</strong>
+                      <span>{item.sla_state}</span>
+                    </div>
+                    <p>{item.recommendation}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <section className="card automation-card">
+            <h3>Decisioni AI recenti</h3>
+            {agentDecisionLogs.isLoading && <p>Caricamento decisioni...</p>}
+            {agentDecisionLogs.isError && <p className="error">{getErrorMessage(agentDecisionLogs.error)}</p>}
+            {!agentDecisionLogs.isLoading && !agentDecisionLogs.isError && (
+              <table>
+                <thead><tr><th>Ticket</th><th>Decisione</th><th>Confidenza</th><th>Motivo</th></tr></thead>
+                <tbody>
+                  {(agentDecisionLogs.data ?? []).slice(0, 8).map((row: AgentDecisionLog) => (
+                    <tr key={row.id}>
+                      <td>{row.ticket_id}</td>
+                      <td>{row.decision}</td>
+                      <td>{row.confidence}</td>
+                      <td>{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+          <section className="card automation-card">
+            <h3>Action Execution Log</h3>
+            {agentActionRuns.isLoading && <p>Caricamento action log...</p>}
+            {agentActionRuns.isError && <p className="error">{getErrorMessage(agentActionRuns.error)}</p>}
+            {!agentActionRuns.isLoading && !agentActionRuns.isError && (
+              <table>
+                <thead><tr><th>Ticket</th><th>Action</th><th>Status</th><th>Dettaglio</th></tr></thead>
+                <tbody>
+                  {(agentActionRuns.data ?? []).slice(0, 8).map((row: AgentActionRun) => (
+                    <tr key={row.id}>
+                      <td>{row.ticket_id}</td>
+                      <td>{row.action_name}</td>
+                      <td>{row.status}</td>
+                      <td>{row.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </section>
         </div>
       )}
@@ -1249,6 +1419,23 @@ function App() {
                       value={automationAssignEmail}
                       onChange={(e) => setAutomationAssignEmail(e.target.value)}
                       placeholder="dispatch@company.com"
+                    />
+                  </label>
+                  <label className="full-row">
+                    Action Webhook URL
+                    <input
+                      value={automationWebhookUrl}
+                      onChange={(e) => setAutomationWebhookUrl(e.target.value)}
+                      placeholder="https://workflow.company.com/agent-actions"
+                    />
+                  </label>
+                  <label className="full-row">
+                    Action Webhook Token (opzionale)
+                    <input
+                      type="password"
+                      value={automationWebhookToken}
+                      onChange={(e) => setAutomationWebhookToken(e.target.value)}
+                      placeholder="Bearer token"
                     />
                   </label>
                   <div className="create-actions">
