@@ -119,6 +119,14 @@ Fornire una base scalabile per:
 
 reportistica
 
+## Documentazione operativa aggiornata
+
+- Hardening produzione: `docs/PRODUCTION_HARDENING.md`
+- Backup/restore: `docs/BACKUP_RESTORE.md`
+- Manuale utente: `docs/MANUALE_UTENTE.md`
+- Processo release: `docs/RELEASE_PROCESS.md`
+- Profili ambiente: `env/.env.dev.example`, `env/.env.stage.example`, `env/.env.prod.example`
+
 KPI tecnici
 
 storico problemi
