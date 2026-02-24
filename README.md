@@ -347,3 +347,8 @@ Script demo rapido:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/simulate_logistics_trigger.ps1
 ```
+
+## Manuale utente
+
+Guida completa all'utilizzo del prodotto:
+- `docs/MANUALE_UTENTE.md`
