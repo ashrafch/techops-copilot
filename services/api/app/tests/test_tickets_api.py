@@ -104,3 +104,19 @@ def test_add_note_and_queue_summary():
     assert payload["open_total"] >= 1
     assert "at_risk_total" in payload
     assert "breached_total" in payload
+
+
+def test_ticket_metrics_endpoint_returns_operational_snapshot():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Metrics endpoint ticket")
+
+    close_resp = client.patch(f"/tickets/{ticket_id}/close")
+    assert close_resp.status_code == 200
+
+    metrics = client.get("/tickets/metrics", params={"tenant_id": "demo"})
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    assert payload["closed_total"] >= 1
+    assert payload["created_last_24h"] >= 1
+    assert "avg_resolution_minutes" in payload
+    assert "breached_open_total" in payload
