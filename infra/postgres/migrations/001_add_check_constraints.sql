@@ -10,7 +10,7 @@ BEGIN
   ) THEN
     ALTER TABLE tickets
       ADD CONSTRAINT tickets_status_check
-      CHECK (status IN ('OPEN', 'CLOSED'));
+      CHECK (status IN ('OPEN', 'IN_PROGRESS', 'WAITING', 'RESOLVED', 'CLOSED'));
   END IF;
 END $$;
 

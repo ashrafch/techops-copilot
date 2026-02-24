@@ -52,3 +52,19 @@ def test_tenant_email_history_contains_recent_requester_email():
     assert response.status_code == 200
     emails = [item["email"] for item in response.json()]
     assert email in emails
+
+
+def test_get_and_patch_tenant_sla_policy():
+    client = TestClient(app)
+    read = client.get("/tenant-sla-policies/demo")
+    assert read.status_code == 200
+    assert read.json()["tenant_id"] == "demo"
+
+    patch = client.patch(
+        "/tenant-sla-policies/demo",
+        json={"p1_minutes": 45, "p2_minutes": 180, "p3_minutes": 360, "p4_minutes": 720},
+    )
+    assert patch.status_code == 200
+    payload = patch.json()
+    assert payload["p1_minutes"] == 45
+    assert payload["p4_minutes"] == 720

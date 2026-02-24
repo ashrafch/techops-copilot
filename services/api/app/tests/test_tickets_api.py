@@ -61,3 +61,46 @@ def test_intake_rejects_invalid_priority():
 
     response = client.post("/intake", json=payload)
     assert response.status_code == 422
+
+
+def test_update_ticket_status_and_assignment():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Lifecycle and assignment")
+
+    status_update = client.patch(
+        f"/tickets/{ticket_id}/status",
+        json={"status": "IN_PROGRESS"},
+    )
+    assert status_update.status_code == 200
+    assert status_update.json()["status"] == "IN_PROGRESS"
+
+    assign = client.patch(
+        f"/tickets/{ticket_id}/assign",
+        json={"assignee_name": "Ops User", "assignee_email": "ops.user@example.com"},
+    )
+    assert assign.status_code == 200
+    assert assign.json()["assignee_email"] == "ops.user@example.com"
+
+    ticket = client.get(f"/tickets/{ticket_id}")
+    assert ticket.status_code == 200
+    payload = ticket.json()
+    assert payload["status"] == "IN_PROGRESS"
+    assert payload["assignee_name"] == "Ops User"
+    assert payload["assignee_email"] == "ops.user@example.com"
+    assert payload["first_response_at"] is not None
+
+
+def test_add_note_and_queue_summary():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Queue summary and notes")
+
+    note = client.post(f"/tickets/{ticket_id}/notes", json={"message": "Investigating root cause"})
+    assert note.status_code == 200
+    assert note.json()["ok"] is True
+
+    summary = client.get("/tickets/queue-summary", params={"tenant_id": "demo"})
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["open_total"] >= 1
+    assert "at_risk_total" in payload
+    assert "breached_total" in payload

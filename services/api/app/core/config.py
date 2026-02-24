@@ -14,6 +14,10 @@ class Settings:
     require_api_key: bool
     rate_limit_requests_per_minute: int
     cors_allowed_origins: list[str]
+    enforce_rbac: bool
+    enforce_auth: bool
+    auth_secret_key: str
+    auth_token_ttl_minutes: int
 
 
 @lru_cache(maxsize=1)
@@ -23,6 +27,8 @@ def get_settings() -> Settings:
     cors_allowed_origins = [
         origin.strip() for origin in cors_allowed_origins_raw.split(",") if origin.strip()
     ]
+    enforce_rbac_raw = os.getenv("ENFORCE_RBAC", "false").strip().lower()
+    enforce_auth_raw = os.getenv("ENFORCE_AUTH", "false").strip().lower()
     return Settings(
         app_name=os.getenv("APP_NAME", "TechOps Copilot API"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -33,4 +39,8 @@ def get_settings() -> Settings:
         require_api_key=require_api_key_raw in {"1", "true", "yes", "on"},
         rate_limit_requests_per_minute=int(os.getenv("RATE_LIMIT_RPM", "0")),
         cors_allowed_origins=cors_allowed_origins,
+        enforce_rbac=enforce_rbac_raw in {"1", "true", "yes", "on"},
+        enforce_auth=enforce_auth_raw in {"1", "true", "yes", "on"},
+        auth_secret_key=os.getenv("AUTH_SECRET_KEY", "dev_auth_secret_change_me"),
+        auth_token_ttl_minutes=int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "480")),
     )

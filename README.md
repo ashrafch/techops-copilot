@@ -207,6 +207,33 @@ Per forzare la policy anche se `API_KEY` non è ancora valorizzata:
 
 Endpoint sempre pubblici: `/health`, `/ready`.
 
+## RBAC (foundation enterprise, opzionale)
+
+Se abiliti:
+`ENFORCE_RBAC=true`
+
+Le operazioni di scrittura (`/intake`, `/events`, `/tickets/*/assign`, `/tickets/*/status`, `/tickets/*/close`) richiedono header:
+
+`X-User-Role: admin` oppure `X-User-Role: operator`
+
+## Auth utente (login reale, opzionale)
+
+Se abiliti:
+`ENFORCE_AUTH=true`
+
+l'API richiede `Authorization: Bearer <token>` sugli endpoint protetti da RBAC.
+
+Endpoint:
+- `POST /auth/login` con body `{"email":"...","password":"..."}`
+- `GET /auth/me`
+
+Seed utenti demo (password iniziale: `ChangeMe123!`):
+- `admin@example.com`
+- `operator@example.com`
+- `viewer@example.com`
+
+Con auth attiva, il ruolo viene letto dal token (non dal solo header `X-User-Role`).
+
 ## Rate limiting (opzionale)
 
 `RATE_LIMIT_RPM` limita richieste/minuto per IP+path sugli endpoint business.
@@ -262,3 +289,24 @@ Modalita' enterprise consigliata:
 - non aggiornare la route globale del tenant a ogni ticket;
 - passa il destinatario nel payload webhook (`notification.to_emails`) e risolvilo nel workflow n8n con fallback alla route tenant.
 - guida operativa: `n8n/docs/enterprise_recipient_override.md`
+
+Workflow ticket enterprise (in sviluppo):
+- stati supportati: `OPEN`, `IN_PROGRESS`, `WAITING`, `RESOLVED`, `CLOSED`
+- assegnazione owner ticket:
+  - `PATCH /tickets/{ticket_id}/assign` con body `{"assignee_name":"...","assignee_email":"..."}`
+  - `PATCH /tickets/{ticket_id}/status` con body `{"status":"IN_PROGRESS"}`
+- note operative:
+  - `POST /tickets/{ticket_id}/notes` con body `{"message":"..."}`
+- SLA:
+  - policy per tenant (`tenant_sla_policies`)
+  - campi ticket: `sla_due_at`, `first_response_at`, `resolved_at`, `sla_state`
+  - summary coda: `GET /tickets/queue-summary?tenant_id=<id>&assignee_email=<email>`
+
+Migrazioni DB idempotenti:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1
+```
+
+Hardening affidabilita' workflow n8n:
+- guida: `n8n/docs/reliability_hardening.md`
+- script patch automatico: `scripts/patch_n8n_reliability.ps1`

@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 
 from app.core.auth import require_api_key
+from app.core.rbac import require_operator_role
 from app.db.session import get_conn
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -29,7 +30,7 @@ class EventOut(BaseModel):
 
 
 @router.post("/events")
-def create_event(payload: EventCreate):
+def create_event(payload: EventCreate, _: None = Depends(require_operator_role)):
     with get_conn() as conn:
         conn.autocommit = False
         try:

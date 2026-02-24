@@ -3,6 +3,7 @@ import logging
 
 from fastapi import Header, HTTPException
 
+from app.core.auth_token import AuthTokenClaims, TokenError, verify_auth_token
 from app.core.config import get_settings
 
 logger = logging.getLogger("app.auth")
@@ -22,3 +23,23 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_key):
         logger.warning("Unauthorized API request blocked")
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def get_current_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> AuthTokenClaims | None:
+    settings = get_settings()
+    if not authorization or not authorization.startswith("Bearer "):
+        if settings.enforce_auth:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return None
+
+    token = authorization[len("Bearer ") :].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        claims = verify_auth_token(token=token, secret=settings.auth_secret_key)
+    except TokenError:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return claims
