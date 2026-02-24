@@ -112,4 +112,9 @@ Write-Output "Read ticket metrics..."
 $metrics = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/metrics?tenant_id=$tenantId" -Headers $headers
 Assert-True -Condition ($null -ne $metrics.open_total) -Message "Metrics endpoint failed."
 
+Write-Output "Run SLA monitor..."
+$slaMonitorBody = @{ tenant_id = $tenantId; limit = 500 } | ConvertTo-Json
+$slaMonitor = Invoke-RestMethod -Method Post -Uri "$BaseUrl/automation/sla-monitor" -Headers $headers -ContentType "application/json" -Body $slaMonitorBody
+Assert-True -Condition ($null -ne $slaMonitor.scanned) -Message "SLA monitor endpoint failed."
+
 Write-Output "SMOKE_ENTERPRISE_ADMIN_OK tenant_id=$tenantId user_email=$newUserEmail"
