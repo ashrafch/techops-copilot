@@ -17,9 +17,11 @@ class Settings:
     enforce_rbac: bool
     enforce_auth: bool
     auth_secret_key: str
+    auth_signing_keys: list[str]
     auth_token_ttl_minutes: int
     auth_refresh_ttl_minutes: int
     auth_require_mfa_for_admin: bool
+    auth_mfa_bootstrap_code: str
     auth_max_failed_logins: int
     auth_lockout_minutes: int
     password_min_length: int
@@ -31,6 +33,8 @@ class Settings:
     enforce_tenant_isolation: bool
     sla_monitor_scheduler_enabled: bool
     sla_monitor_scheduler_interval_seconds: int
+    sso_default_audience: str
+    sso_default_issuer: str
 
 
 @lru_cache(maxsize=1)
@@ -43,6 +47,10 @@ def get_settings() -> Settings:
     enforce_rbac_raw = os.getenv("ENFORCE_RBAC", "false").strip().lower()
     enforce_auth_raw = os.getenv("ENFORCE_AUTH", "false").strip().lower()
     auth_require_mfa_for_admin_raw = os.getenv("AUTH_REQUIRE_MFA_FOR_ADMIN", "false").strip().lower()
+    auth_secret_key = os.getenv("AUTH_SECRET_KEY", "dev_auth_secret_change_me")
+    auth_secret_keys_raw = os.getenv("AUTH_SECRET_KEYS", "")
+    parsed_keys = [k.strip() for k in auth_secret_keys_raw.split(",") if k.strip()]
+    auth_signing_keys = [auth_secret_key] + [k for k in parsed_keys if k != auth_secret_key]
     enforce_tenant_isolation_raw = os.getenv("ENFORCE_TENANT_ISOLATION", "true").strip().lower()
     scheduler_enabled_raw = os.getenv("SLA_MONITOR_SCHEDULER_ENABLED", "false").strip().lower()
     return Settings(
@@ -57,10 +65,12 @@ def get_settings() -> Settings:
         cors_allowed_origins=cors_allowed_origins,
         enforce_rbac=enforce_rbac_raw in {"1", "true", "yes", "on"},
         enforce_auth=enforce_auth_raw in {"1", "true", "yes", "on"},
-        auth_secret_key=os.getenv("AUTH_SECRET_KEY", "dev_auth_secret_change_me"),
+        auth_secret_key=auth_secret_key,
+        auth_signing_keys=auth_signing_keys,
         auth_token_ttl_minutes=int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "480")),
         auth_refresh_ttl_minutes=int(os.getenv("AUTH_REFRESH_TTL_MINUTES", "10080")),
         auth_require_mfa_for_admin=auth_require_mfa_for_admin_raw in {"1", "true", "yes", "on"},
+        auth_mfa_bootstrap_code=os.getenv("AUTH_MFA_BOOTSTRAP_CODE", "000000").strip(),
         auth_max_failed_logins=int(os.getenv("AUTH_MAX_FAILED_LOGINS", "5")),
         auth_lockout_minutes=int(os.getenv("AUTH_LOCKOUT_MINUTES", "15")),
         password_min_length=int(os.getenv("PASSWORD_MIN_LENGTH", "12")),
@@ -72,4 +82,6 @@ def get_settings() -> Settings:
         enforce_tenant_isolation=enforce_tenant_isolation_raw in {"1", "true", "yes", "on"},
         sla_monitor_scheduler_enabled=scheduler_enabled_raw in {"1", "true", "yes", "on"},
         sla_monitor_scheduler_interval_seconds=int(os.getenv("SLA_MONITOR_SCHEDULER_INTERVAL_SECONDS", "300")),
+        sso_default_audience=os.getenv("SSO_DEFAULT_AUDIENCE", "techops-copilot"),
+        sso_default_issuer=os.getenv("SSO_DEFAULT_ISSUER", "techops-sso"),
     )

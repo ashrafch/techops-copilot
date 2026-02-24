@@ -92,3 +92,16 @@ def verify_auth_token(token: str, secret: str) -> AuthTokenClaims:
         sid=str(payload.get("sid", "")),
         typ=str(payload.get("typ", "access")),
     )
+
+
+def verify_auth_token_with_secrets(token: str, secrets_list: list[str]) -> AuthTokenClaims:
+    last_error: Exception | None = None
+    for secret in secrets_list:
+        if not secret.strip():
+            continue
+        try:
+            return verify_auth_token(token=token, secret=secret.strip())
+        except TokenError as exc:
+            last_error = exc
+            continue
+    raise TokenError(str(last_error or "Token verification failed"))

@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.core.auth import get_current_user, require_api_key
 from app.core.config import get_settings
 from app.core.identity import resolve_actor
+from app.core.mfa import generate_mfa_secret, provisioning_uri
 from app.core.rbac import require_admin_role
 from app.core.security import generate_salt_hex, hash_password, validate_password_policy
 from app.db.audit import log_admin_action
@@ -26,6 +27,7 @@ class AdminUserOut(BaseModel):
     role: UserRole
     tenant_id: str
     is_active: bool
+    mfa_enabled: bool
     updated_at: datetime
 
 
@@ -73,6 +75,33 @@ class SecurityCleanupOut(BaseModel):
     deleted_login_attempts: int
 
 
+class AdminMfaEnrollOut(BaseModel):
+    user_id: int
+    email: str
+    mfa_enabled: bool
+    mfa_secret: str
+    otp_uri: str
+
+
+class TenantSsoConfigOut(BaseModel):
+    tenant_id: str
+    provider: str
+    issuer: str
+    audience: str
+    client_id: str
+    is_enabled: bool
+    updated_at: datetime
+
+
+class TenantSsoConfigUpdate(BaseModel):
+    provider: str = Field(default="oidc", max_length=32)
+    issuer: str = Field(default="", max_length=255)
+    audience: str = Field(default="", max_length=255)
+    client_id: str = Field(default="", max_length=255)
+    sso_shared_secret: str = Field(default="", max_length=2048)
+    is_enabled: bool = False
+
+
 @router.get("/admin/users", response_model=List[AdminUserOut])
 def list_admin_users(
     tenant_id: str = Query("", min_length=0),
@@ -86,7 +115,7 @@ def list_admin_users(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, email, full_name, role, tenant_id, is_active, updated_at
+            SELECT id, email, full_name, role, tenant_id, is_active, mfa_enabled, updated_at
             FROM app_users
             {where}
             ORDER BY tenant_id ASC, role ASC, email ASC
@@ -103,7 +132,8 @@ def list_admin_users(
             role=row[3],
             tenant_id=row[4],
             is_active=row[5],
-            updated_at=row[6],
+            mfa_enabled=row[6],
+            updated_at=row[7],
         )
         for row in rows
     ]
@@ -180,7 +210,7 @@ def create_admin_user(
                     """
                     INSERT INTO app_users (email, full_name, password_hash, password_salt, role, tenant_id, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id, email, full_name, role, tenant_id, is_active, updated_at
+                    RETURNING id, email, full_name, role, tenant_id, is_active, mfa_enabled, updated_at
                     """,
                     (
                         str(payload.email).strip().lower(),
@@ -217,7 +247,8 @@ def create_admin_user(
         role=row[3],
         tenant_id=row[4],
         is_active=row[5],
-        updated_at=row[6],
+        mfa_enabled=row[6],
+        updated_at=row[7],
     )
 
 
@@ -234,7 +265,7 @@ def update_admin_user(
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, email, full_name, role, tenant_id, is_active, updated_at FROM app_users WHERE id = %s",
+                    "SELECT id, email, full_name, role, tenant_id, is_active, mfa_enabled, updated_at FROM app_users WHERE id = %s",
                     (user_id,),
                 )
                 existing = cur.fetchone()
@@ -256,7 +287,7 @@ def update_admin_user(
                         is_active = %s,
                         updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, email, full_name, role, tenant_id, is_active, updated_at
+                    RETURNING id, email, full_name, role, tenant_id, is_active, mfa_enabled, updated_at
                     """,
                     (new_full_name, new_role, new_tenant, new_active, user_id),
                 )
@@ -288,7 +319,8 @@ def update_admin_user(
         role=row[3],
         tenant_id=row[4],
         is_active=row[5],
-        updated_at=row[6],
+        mfa_enabled=row[6],
+        updated_at=row[7],
     )
 
 
@@ -473,6 +505,191 @@ def security_cleanup():
             return SecurityCleanupOut(
                 deleted_security_logs=deleted_security,
                 deleted_login_attempts=deleted_attempts,
+            )
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.post("/admin/users/{user_id}/mfa/enroll", response_model=AdminMfaEnrollOut)
+def enroll_user_mfa(
+    user_id: int,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
+    secret = generate_mfa_secret()
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app_users
+                    SET mfa_enabled = TRUE,
+                        mfa_secret = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, email, tenant_id
+                    """,
+                    (secret, user_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                otp_uri = provisioning_uri(secret=secret, email=row[1])
+                log_admin_action(
+                    conn,
+                    tenant_id=str(row[2]),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="ADMIN_USER_MFA_ENROLLED",
+                    target_type="app_user",
+                    target_id=str(user_id),
+                    details={},
+                )
+            conn.commit()
+            return AdminMfaEnrollOut(
+                user_id=row[0],
+                email=row[1],
+                mfa_enabled=True,
+                mfa_secret=secret,
+                otp_uri=otp_uri,
+            )
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.post("/admin/users/{user_id}/mfa/disable")
+def disable_user_mfa(
+    user_id: int,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app_users
+                    SET mfa_enabled = FALSE,
+                        mfa_secret = '',
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, email, tenant_id
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                log_admin_action(
+                    conn,
+                    tenant_id=str(row[2]),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="ADMIN_USER_MFA_DISABLED",
+                    target_type="app_user",
+                    target_id=str(user_id),
+                    details={},
+                )
+            conn.commit()
+            return {"ok": True}
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.get("/admin/sso-config/{tenant_id}", response_model=TenantSsoConfigOut)
+def get_tenant_sso_config(tenant_id: str):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tenant_id, provider, issuer, audience, client_id, is_enabled, updated_at
+            FROM tenant_sso_configs
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="SSO config not found")
+    return TenantSsoConfigOut(
+        tenant_id=row[0],
+        provider=row[1],
+        issuer=row[2],
+        audience=row[3],
+        client_id=row[4],
+        is_enabled=row[5],
+        updated_at=row[6],
+    )
+
+
+@router.patch("/admin/sso-config/{tenant_id}", response_model=TenantSsoConfigOut)
+def update_tenant_sso_config(
+    tenant_id: str,
+    payload: TenantSsoConfigUpdate,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tenant_sso_configs (tenant_id, provider, issuer, audience, client_id, sso_shared_secret, is_enabled)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                      provider = EXCLUDED.provider,
+                      issuer = EXCLUDED.issuer,
+                      audience = EXCLUDED.audience,
+                      client_id = EXCLUDED.client_id,
+                      sso_shared_secret = CASE WHEN EXCLUDED.sso_shared_secret <> '' THEN EXCLUDED.sso_shared_secret ELSE tenant_sso_configs.sso_shared_secret END,
+                      is_enabled = EXCLUDED.is_enabled,
+                      updated_at = NOW()
+                    RETURNING tenant_id, provider, issuer, audience, client_id, is_enabled, updated_at
+                    """,
+                    (
+                        tenant_id.strip(),
+                        payload.provider.strip().lower() or "oidc",
+                        payload.issuer.strip(),
+                        payload.audience.strip(),
+                        payload.client_id.strip(),
+                        payload.sso_shared_secret.strip(),
+                        payload.is_enabled,
+                    ),
+                )
+                row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=tenant_id.strip(),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="TENANT_SSO_CONFIG_UPDATED",
+                    target_type="tenant_sso_config",
+                    target_id=tenant_id.strip(),
+                    details={"provider": row[1], "issuer": row[2], "audience": row[3], "client_id": row[4], "is_enabled": row[5]},
+                )
+            conn.commit()
+            return TenantSsoConfigOut(
+                tenant_id=row[0],
+                provider=row[1],
+                issuer=row[2],
+                audience=row[3],
+                client_id=row[4],
+                is_enabled=row[5],
+                updated_at=row[6],
             )
         except Exception:
             conn.rollback()

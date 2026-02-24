@@ -3,7 +3,7 @@ import logging
 
 from fastapi import Header, HTTPException
 
-from app.core.auth_token import AuthTokenClaims, TokenError, verify_auth_token
+from app.core.auth_token import AuthTokenClaims, TokenError, verify_auth_token_with_secrets
 from app.core.config import get_settings
 from app.db.session import get_conn
 
@@ -40,7 +40,7 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
-        claims = verify_auth_token(token=token, secret=settings.auth_secret_key)
+        claims = verify_auth_token_with_secrets(token=token, secrets_list=settings.auth_signing_keys)
     except TokenError:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if claims.typ != "access":

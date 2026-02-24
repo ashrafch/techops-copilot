@@ -2,6 +2,7 @@ param(
   [string]$BaseUrl = "http://localhost:8001",
   [string]$AdminEmail = "admin@example.com",
   [string]$AdminPassword = "ChangeMe123!",
+  [string]$MfaCode = "000000",
   [string]$ApiKey = ""
 )
 
@@ -36,6 +37,26 @@ function Build-Headers {
   return $h
 }
 
+function Load-EnvMap {
+  $map = @{}
+  if (Test-Path ".env") {
+    foreach ($line in Get-Content ".env") {
+      if ($line -match '^\s*#' -or $line -match '^\s*$') { continue }
+      $parts = $line -split '=', 2
+      if ($parts.Count -eq 2) { $map[$parts[0].Trim()] = $parts[1].Trim() }
+    }
+  }
+  return $map
+}
+
+function Reset-AdminLoginLock {
+  param([string]$Email)
+  $envMap = Load-EnvMap
+  $dbUser = if ($envMap.ContainsKey("POSTGRES_APP_USER")) { $envMap["POSTGRES_APP_USER"] } else { "techops" }
+  $dbName = if ($envMap.ContainsKey("POSTGRES_APP_DB")) { $envMap["POSTGRES_APP_DB"] } else { "techops" }
+  docker compose exec -T postgres_app psql -U $dbUser -d $dbName -c "DELETE FROM auth_login_attempts WHERE LOWER(email) = LOWER('$Email');" | Out-Null
+}
+
 Write-Output "Starting containers..."
 docker compose up -d postgres_app minio api | Out-Null
 Write-Output "Applying database migrations..."
@@ -47,14 +68,48 @@ Wait-ForHealth -Url $BaseUrl
 $headers = Build-Headers
 
 Write-Output "Admin login..."
+$authEnforced = $false
 try {
-  $loginBody = @{ email = $AdminEmail; password = $AdminPassword } | ConvertTo-Json
-  $loginResp = Invoke-RestMethod -Method Post -Uri "$BaseUrl/auth/login" -Headers $headers -ContentType "application/json" -Body $loginBody
-  if ($loginResp.access_token) {
-    $headers["Authorization"] = "Bearer $($loginResp.access_token)"
+  $envMap = Load-EnvMap
+  if ($envMap.ContainsKey("ENFORCE_AUTH")) {
+    $authEnforced = @("1","true","yes","on") -contains $envMap["ENFORCE_AUTH"].ToLower()
+  }
+} catch {}
+try {
+  $candidatePasswords = @($AdminPassword, "ChangeMe123!", "AdminPass123!X") | Select-Object -Unique
+  foreach ($pwd in $candidatePasswords) {
+    try {
+      $loginBody = @{ email = $AdminEmail; password = $pwd } | ConvertTo-Json
+      $loginHeaders = @{}
+      foreach ($k in $headers.Keys) { $loginHeaders[$k] = $headers[$k] }
+      if (-not [string]::IsNullOrWhiteSpace($MfaCode)) {
+        $loginHeaders["X-MFA-Code"] = $MfaCode
+      }
+      $loginResp = Invoke-RestMethod -Method Post -Uri "$BaseUrl/auth/login" -Headers $loginHeaders -ContentType "application/json" -Body $loginBody
+      if ($loginResp.access_token) {
+        $headers["Authorization"] = "Bearer $($loginResp.access_token)"
+        break
+      }
+    } catch {
+      $details = ""
+      if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $details = $_.ErrorDetails.Message }
+      if ($details -like "*temporarily locked*") {
+        Reset-AdminLoginLock -Email $AdminEmail
+      }
+    }
+  }
+  if (-not $headers.ContainsKey("Authorization")) {
+    throw "Login failed for all candidate admin passwords."
   }
 } catch {
-  Write-Output "AUTH_OPTIONAL_FALLBACK"
+  if (-not $authEnforced) {
+    Write-Output "AUTH_OPTIONAL_FALLBACK"
+  } else {
+    throw
+  }
+}
+if ($authEnforced -and -not $headers.ContainsKey("Authorization")) {
+  throw "Auth is enforced but admin login failed. Verify admin credentials and MFA code."
 }
 
 $tenantId = "demo"

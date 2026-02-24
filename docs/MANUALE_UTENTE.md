@@ -244,6 +244,12 @@ Controlla:
 - **Catalogo playbook versionato**: in Admin > Automation puoi creare playbook per evento/severità con versione controllata.
 - **Localizzazione IT/EN**: pulsante lingua in header per passare rapidamente tra italiano e inglese.
 
+### 13.2 Sicurezza enterprise
+
+- **MFA admin TOTP**: puoi abilitare/disabilitare MFA per utenti admin con endpoint admin dedicati.
+- **SSO enterprise**: puoi configurare provider/issuer/audience/client per tenant e autenticare utenti con `/auth/sso/login`.
+- **Key rotation JWT**: puoi impostare chiavi multiple con `AUTH_SECRET_KEYS` mantenendo la chiave attiva in `AUTH_SECRET_KEY`.
+
 ## 14. Glossario
 
 - **Tenant**: cliente/ambiente logico isolato.

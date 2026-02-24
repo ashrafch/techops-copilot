@@ -95,6 +95,7 @@ export interface AdminUser {
   role: "admin" | "operator" | "viewer";
   tenant_id: string;
   is_active: boolean;
+  mfa_enabled: boolean;
   updated_at: string;
 }
 
