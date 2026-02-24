@@ -282,6 +282,10 @@ function App() {
     queryFn: () => api.listAgentActions(tenantId, 50),
     enabled: !enforceAuth || Boolean(accessToken),
   });
+  const normalizedMemoryEventType =
+    (selectedTicket.data?.machine_station ?? "").trim() || "GENERIC_EVENT";
+  const normalizedMemoryAssetId =
+    (selectedTicket.data?.machine_serial ?? "").trim() || "UNKNOWN_ASSET";
   const agentMemorySuggestions = useQuery({
     queryKey: [
       "agent-memory-suggestions",
@@ -290,14 +294,14 @@ function App() {
       accessToken,
       userRole,
       tenantId,
-      selectedTicket.data?.machine_station ?? "",
-      selectedTicket.data?.machine_serial ?? "",
+      normalizedMemoryEventType,
+      normalizedMemoryAssetId,
     ],
     queryFn: () =>
       api.listAgentMemorySuggestions(
         tenantId,
-        selectedTicket.data?.machine_station ?? "GENERIC_EVENT",
-        selectedTicket.data?.machine_serial ?? "",
+        normalizedMemoryEventType,
+        normalizedMemoryAssetId,
         5,
       ),
     enabled: Boolean(selectedTicket.data?.ticket_id) && (!enforceAuth || Boolean(accessToken)),
@@ -485,8 +489,8 @@ function App() {
       return api.addAgentMemoryFeedback({
         tenant_id: selectedTicket.data.tenant_id,
         ticket_id: selectedTicket.data.ticket_id,
-        event_type: selectedTicket.data.machine_station || "GENERIC_EVENT",
-        asset_id: selectedTicket.data.machine_serial || "",
+        event_type: normalizedMemoryEventType,
+        asset_id: normalizedMemoryAssetId,
         outcome_score: Number(memoryScore),
         resolution_note: memoryNote.trim(),
       });
