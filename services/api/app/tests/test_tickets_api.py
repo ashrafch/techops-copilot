@@ -120,3 +120,20 @@ def test_ticket_metrics_endpoint_returns_operational_snapshot():
     assert payload["created_last_24h"] >= 1
     assert "avg_resolution_minutes" in payload
     assert "breached_open_total" in payload
+
+
+def test_ticket_executive_report_returns_business_snapshot():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Executive report ticket")
+    close_resp = client.patch(f"/tickets/{ticket_id}/close")
+    assert close_resp.status_code == 200
+
+    report = client.get("/tickets/executive-report", params={"tenant_id": "demo", "days": 30})
+    assert report.status_code == 200
+    payload = report.json()
+    assert payload["tenant_id"] == "demo"
+    assert payload["window_days"] == 30
+    assert "sla_attainment_pct" in payload
+    assert "mttr_minutes" in payload
+    assert "estimated_cost_impact" in payload
+    assert isinstance(payload["trend"], list)

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -26,6 +26,7 @@ const DEFAULT_INTAKE_MODE = import.meta.env.VITE_INTAKE_MODE ?? "webhook";
 const EMAIL_HISTORY_KEY = "techops.email_history";
 const AUTH_TOKEN_KEY = "techops.auth.token";
 const AUTH_USER_KEY = "techops.auth.user";
+const LOCALE_KEY = "techops.locale";
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -67,6 +68,11 @@ function loadAuthUser(): { email: string; full_name: string; role: string; tenan
   }
 }
 
+function loadLocale(): "it" | "en" {
+  const raw = window.localStorage.getItem(LOCALE_KEY) ?? "it";
+  return raw === "en" ? "en" : "it";
+}
+
 function persistAuth(token: string, user: { email: string; full_name: string; role: string; tenant_id: string }) {
   window.localStorage.setItem(AUTH_TOKEN_KEY, token);
   window.localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
@@ -77,6 +83,10 @@ function clearAuth() {
   window.localStorage.removeItem(AUTH_USER_KEY);
 }
 
+function persistLocale(locale: "it" | "en") {
+  window.localStorage.setItem(LOCALE_KEY, locale);
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return `${error.message} (status ${error.status})`;
   if (error instanceof Error) return error.message;
@@ -84,6 +94,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 function App() {
+  const [locale, setLocale] = useState<"it" | "en">(() => loadLocale());
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [userRole, setUserRole] = useState(DEFAULT_USER_ROLE);
@@ -158,12 +169,44 @@ function App() {
     machineStation: "",
     machineSerial: "",
   });
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(1);
+  const [toasts, setToasts] = useState<Array<{ id: number; kind: "ok" | "warn" | "error"; message: string }>>([]);
 
   const queryClient = useQueryClient();
   const api = useMemo(
     () => createApiClient({ baseUrl, apiKey, webhookUrl, userRole, accessToken }),
     [baseUrl, apiKey, webhookUrl, userRole, accessToken],
   );
+  const txt = useMemo(() => {
+    const map = {
+      it: {
+        appTitle: "AI Operations Copilot",
+        onboardingTitle: "Onboarding guidato",
+        onboardingDone: "Onboarding completato",
+        notifications: "Notifiche",
+        noNotifications: "Nessuna notifica rilevante",
+        reportTitle: "Executive report",
+      },
+      en: {
+        appTitle: "AI Operations Copilot",
+        onboardingTitle: "Guided onboarding",
+        onboardingDone: "Onboarding completed",
+        notifications: "Notifications",
+        noNotifications: "No relevant notifications",
+        reportTitle: "Executive report",
+      },
+    } as const;
+    return map[locale];
+  }, [locale]);
+
+  function pushToast(kind: "ok" | "warn" | "error", message: string) {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts((prev) => [...prev, { id, kind, message }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((x) => x.id !== id));
+    }, 3500);
+  }
 
   const loginMutation = useMutation({
     mutationFn: (args: { email: string; password: string }) => api.login(args.email, args.password),
@@ -187,6 +230,19 @@ function App() {
   const effectiveRole = meQuery.data?.role ?? authUser?.role ?? userRole;
   const isAdminUser = effectiveRole === "admin";
   const resolvedView = !isAdminUser && activeView === "admin" ? "operations" : activeView;
+
+  useEffect(() => {
+    persistLocale(locale);
+  }, [locale]);
+
+  useEffect(() => {
+    const actor = authUser?.email || meQuery.data?.email || "";
+    if (!actor) return;
+    const tenant = authUser?.tenant_id || meQuery.data?.tenant_id || tenantId;
+    const key = `techops.onboarding.done.${tenant}.${actor}`;
+    const done = window.localStorage.getItem(key) === "true";
+    setOnboardingOpen(!done);
+  }, [authUser?.email, authUser?.tenant_id, meQuery.data?.email, meQuery.data?.tenant_id, tenantId]);
 
   const health = useQuery({
     queryKey: ["health", baseUrl],
@@ -293,6 +349,11 @@ function App() {
     queryFn: () => api.listAgentActions(tenantId, 50),
     enabled: !enforceAuth || Boolean(accessToken),
   });
+  const executiveReport = useQuery({
+    queryKey: ["executive-report", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getExecutiveReport(tenantId, 30),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
   const pendingDecisions = useQuery({
     queryKey: ["agent-pending-decisions", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.listAgentPendingDecisions(tenantId, "PENDING", 100),
@@ -354,13 +415,18 @@ function App() {
       api.assignTicket(args.ticketId, args.assigneeName, args.assigneeEmail),
     onSuccess: () => {
       setAssignError("");
+      pushToast("ok", locale === "it" ? "Assegnazione aggiornata" : "Assignment updated");
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
     },
-    onError: (error) => setAssignError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setAssignError(msg);
+      pushToast("error", msg);
+    },
   });
 
   const statusMutation = useMutation({
@@ -368,13 +434,18 @@ function App() {
       api.updateTicketStatus(args.ticketId, args.status),
     onSuccess: () => {
       setStatusError("");
+      pushToast("ok", locale === "it" ? "Stato ticket aggiornato" : "Ticket status updated");
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
     },
-    onError: (error) => setStatusError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setStatusError(msg);
+      pushToast("error", msg);
+    },
   });
 
   const noteMutation = useMutation({
@@ -383,9 +454,14 @@ function App() {
     onSuccess: () => {
       setNoteError("");
       setNoteText("");
+      pushToast("ok", locale === "it" ? "Nota aggiunta" : "Note added");
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
-    onError: (error) => setNoteError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setNoteError(msg);
+      pushToast("error", msg);
+    },
   });
 
   const createMutation = useMutation({
@@ -402,6 +478,7 @@ function App() {
     },
     onSuccess: (result) => {
       setCreateError("");
+      pushToast("ok", locale === "it" ? `Ticket creato ${result.ticket_id}` : `Ticket created ${result.ticket_id}`);
       setSelectedTicketId(result.ticket_id);
       const normalizedRequester = createForm.requesterEmail.trim().toLowerCase();
       const normalizedTarget = effectiveNotificationEmail;
@@ -434,7 +511,9 @@ function App() {
       });
     },
     onError: (error) => {
-      setCreateError(getErrorMessage(error));
+      const msg = getErrorMessage(error);
+      setCreateError(msg);
+      pushToast("error", msg);
     },
   });
 
@@ -515,21 +594,31 @@ function App() {
     onSuccess: () => {
       setAdminError("");
       setPendingDecisionReviewNote("");
+      pushToast("ok", locale === "it" ? "Decisione approvata" : "Decision approved");
       queryClient.invalidateQueries({ queryKey: ["agent-pending-decisions"] });
       queryClient.invalidateQueries({ queryKey: ["agent-actions"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
-    onError: (error) => setAdminError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setAdminError(msg);
+      pushToast("error", msg);
+    },
   });
   const rejectPendingDecisionMutation = useMutation({
     mutationFn: (decisionId: number) => api.rejectAgentPendingDecision(decisionId, pendingDecisionReviewNote),
     onSuccess: () => {
       setAdminError("");
       setPendingDecisionReviewNote("");
+      pushToast("warn", locale === "it" ? "Decisione rifiutata" : "Decision rejected");
       queryClient.invalidateQueries({ queryKey: ["agent-pending-decisions"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
-    onError: (error) => setAdminError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setAdminError(msg);
+      pushToast("error", msg);
+    },
   });
   const createPlaybookMutation = useMutation({
     mutationFn: () =>
@@ -550,9 +639,14 @@ function App() {
       setPlaybookTeam("");
       setPlaybookRunbook("");
       setPlaybookAction("");
+      pushToast("ok", locale === "it" ? "Playbook aggiunto" : "Playbook added");
       queryClient.invalidateQueries({ queryKey: ["agent-playbooks"] });
     },
-    onError: (error) => setAdminError(getErrorMessage(error)),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setAdminError(msg);
+      pushToast("error", msg);
+    },
   });
   const memoryFeedbackMutation = useMutation({
     mutationFn: () => {
@@ -706,6 +800,16 @@ function App() {
       : resolvedView === "kpi"
         ? "Controlla carico, rischi SLA e velocita di risoluzione."
         : "Configura utenti, regole e automazioni del tenant.";
+  const escalationItems = useMemo(() => {
+    const items: string[] = [];
+    const atRisk = queueSummary.data?.at_risk_total ?? 0;
+    const breached = queueSummary.data?.breached_total ?? 0;
+    const pending = pendingDecisions.data?.length ?? 0;
+    if (breached > 0) items.push(locale === "it" ? `${breached} ticket SLA breached` : `${breached} breached SLA tickets`);
+    if (atRisk > 0) items.push(locale === "it" ? `${atRisk} ticket a rischio SLA` : `${atRisk} SLA at-risk tickets`);
+    if (pending > 0) items.push(locale === "it" ? `${pending} decisioni AI in attesa` : `${pending} AI decisions pending`);
+    return items;
+  }, [queueSummary.data?.at_risk_total, queueSummary.data?.breached_total, pendingDecisions.data?.length, locale]);
 
   function handleLogout() {
     clearAuth();
@@ -713,14 +817,31 @@ function App() {
     setAuthUser(null);
   }
 
+  function completeOnboarding() {
+    const actor = authUser?.email || meQuery.data?.email || "";
+    const tenant = authUser?.tenant_id || meQuery.data?.tenant_id || tenantId;
+    if (actor && tenant) {
+      window.localStorage.setItem(`techops.onboarding.done.${tenant}.${actor}`, "true");
+    }
+    setOnboardingOpen(false);
+    setOnboardingStep(1);
+    pushToast("ok", txt.onboardingDone);
+  }
+
   return (
     <div className="page-shell">
       <header className="topbar">
         <div className="topbar-main">
-          <h1>TechOps Copilot Console</h1>
+          <h1>{txt.appTitle}</h1>
           <p className="subtitle">AI Agent per ticketing automatico, escalation SLA e controllo operativo.</p>
         </div>
         <div className="status-grid">
+          <button
+            className="secondary-button"
+            onClick={() => setLocale((prev) => (prev === "it" ? "en" : "it"))}
+          >
+            {locale.toUpperCase()}
+          </button>
           {activeUser && (
             <div className="status-chip">
               Utente: {activeUser.full_name || activeUser.email} ({activeUser.role})
@@ -1107,6 +1228,17 @@ function App() {
 
         <section className="card detail-card">
           <h2>Dettaglio Ticket</h2>
+          <h3>{txt.notifications}</h3>
+          {!escalationItems.length && <p className="subtitle">{txt.noNotifications}</p>}
+          {!!escalationItems.length && (
+            <ul className="timeline">
+              {escalationItems.map((item) => (
+                <li key={item}>
+                  <p>{item}</p>
+                </li>
+              ))}
+            </ul>
+          )}
           {!selectedTicketId && <p>Seleziona un ticket dalla inbox per vedere dettagli e timeline.</p>}
           {selectedTicket.isError && <p className="error">{getErrorMessage(selectedTicket.error)}</p>}
           {selectedTicket.data && (
@@ -1289,6 +1421,41 @@ function App() {
               <div><span>Open At Risk</span><strong>{ticketMetrics.data?.at_risk_open_total ?? "-"}</strong></div>
               <div><span>Open Breached</span><strong>{ticketMetrics.data?.breached_open_total ?? "-"}</strong></div>
             </div>
+          </section>
+          <section className="card analytics-card">
+            <h2>{txt.reportTitle}</h2>
+            {executiveReport.isLoading && <p>Calcolo report...</p>}
+            {executiveReport.isError && <p className="error">{getErrorMessage(executiveReport.error)}</p>}
+            {executiveReport.data && (
+              <>
+                <div className="analytics-grid">
+                  <div><span>Created</span><strong>{executiveReport.data.total_created}</strong></div>
+                  <div><span>Closed</span><strong>{executiveReport.data.total_closed}</strong></div>
+                  <div><span>SLA Attainment</span><strong>{executiveReport.data.sla_attainment_pct}%</strong></div>
+                  <div><span>MTTR</span><strong>{executiveReport.data.mttr_minutes} min</strong></div>
+                  <div><span>Breach next 24h</span><strong>{executiveReport.data.predicted_breach_24h}</strong></div>
+                  <div><span>Automation Coverage</span><strong>{executiveReport.data.automation_coverage_pct}%</strong></div>
+                  <div><span>Hours Saved</span><strong>{executiveReport.data.estimated_manual_hours_saved}</strong></div>
+                  <div><span>Cost Impact</span><strong>{executiveReport.data.estimated_cost_impact} EUR</strong></div>
+                </div>
+                {!!executiveReport.data.trend.length && (
+                  <table>
+                    <thead><tr><th>Day</th><th>Created</th><th>Closed</th><th>MTTR</th><th>SLA %</th></tr></thead>
+                    <tbody>
+                      {executiveReport.data.trend.slice(-7).map((d) => (
+                        <tr key={d.day}>
+                          <td>{d.day}</td>
+                          <td>{d.created}</td>
+                          <td>{d.closed}</td>
+                          <td>{d.mttr_minutes}</td>
+                          <td>{d.sla_attainment_pct}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
           </section>
           <section className="card automation-card">
             <h3>Automazione AI attiva</h3>
@@ -1775,6 +1942,48 @@ function App() {
         </section>
       )}
       </>
+      )}
+      {onboardingOpen && (
+        <div className="overlay">
+          <section className="card onboarding-modal">
+            <h2>{txt.onboardingTitle}</h2>
+            <p className="subtitle">
+              {locale === "it"
+                ? `Step ${onboardingStep}/4: configura il prodotto per essere operativo velocemente.`
+                : `Step ${onboardingStep}/4: configure the product to become operational quickly.`}
+            </p>
+            {onboardingStep === 1 && <p>{locale === "it" ? "1) Verifica API Health/Ready e tenant corrente." : "1) Verify API Health/Ready and current tenant."}</p>}
+            {onboardingStep === 2 && <p>{locale === "it" ? "2) Crea un ticket test dalla inbox operativa." : "2) Create a test ticket from the operations inbox."}</p>}
+            {onboardingStep === 3 && <p>{locale === "it" ? "3) Configura routing email e policy SLA nel pannello Admin." : "3) Configure email routing and SLA policy in the Admin panel."}</p>}
+            {onboardingStep === 4 && <p>{locale === "it" ? "4) Abilita soglie AI governance e verifica decisioni pending." : "4) Enable AI governance thresholds and verify pending decisions."}</p>}
+            <div className="create-actions">
+              {onboardingStep > 1 && (
+                <button className="secondary-button" onClick={() => setOnboardingStep((s) => Math.max(1, s - 1))}>
+                  {locale === "it" ? "Indietro" : "Back"}
+                </button>
+              )}
+              {onboardingStep < 4 ? (
+                <button onClick={() => setOnboardingStep((s) => Math.min(4, s + 1))}>
+                  {locale === "it" ? "Avanti" : "Next"}
+                </button>
+              ) : (
+                <button onClick={completeOnboarding}>{locale === "it" ? "Completa" : "Complete"}</button>
+              )}
+              <button className="secondary-button" onClick={() => setOnboardingOpen(false)}>
+                {locale === "it" ? "Chiudi" : "Close"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {!!toasts.length && (
+        <div className="toast-stack">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`toast ${toast.kind}`}>
+              {toast.message}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -453,6 +453,51 @@ tbody tr.selected {
   margin: 0;
 }
 
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 32, 52, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 16px;
+}
+
+.onboarding-modal {
+  width: min(680px, 100%);
+}
+
+.toast-stack {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 50;
+}
+
+.toast {
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 0.84rem;
+  box-shadow: var(--shadow);
+}
+
+.toast.ok {
+  background: #0f766e;
+}
+
+.toast.warn {
+  background: #b45309;
+}
+
+.toast.error {
+  background: #be123c;
+}
+
 @media (max-width: 1160px) {
   .content-grid {
     grid-template-columns: 1fr;

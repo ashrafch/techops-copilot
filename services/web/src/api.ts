@@ -227,6 +227,28 @@ export interface AgentMemorySuggestion {
   created_at: string;
 }
 
+export interface ExecutiveTrendPoint {
+  day: string;
+  created: number;
+  closed: number;
+  mttr_minutes: number;
+  sla_attainment_pct: number;
+}
+
+export interface ExecutiveReport {
+  tenant_id: string;
+  window_days: number;
+  total_created: number;
+  total_closed: number;
+  sla_attainment_pct: number;
+  mttr_minutes: number;
+  predicted_breach_24h: number;
+  automation_coverage_pct: number;
+  estimated_manual_hours_saved: number;
+  estimated_cost_impact: number;
+  trend: ExecutiveTrendPoint[];
+}
+
 export interface AgentPendingDecision {
   id: number;
   tenant_id: string;
@@ -382,6 +404,10 @@ export function createApiClient(options: ApiClientOptions) {
       ),
     getTicketMetrics: (tenantId: string) =>
       getJson<TicketMetrics>(`/tickets/metrics?tenant_id=${encodeURIComponent(tenantId)}`),
+    getExecutiveReport: (tenantId: string, days = 30) =>
+      getJson<ExecutiveReport>(
+        `/tickets/executive-report?tenant_id=${encodeURIComponent(tenantId)}&days=${days}`,
+      ),
     getTicket: (ticketId: string) => getJson<Ticket>(`/tickets/${encodeURIComponent(ticketId)}`),
     getTicketEvents: (ticketId: string) =>
       getJson<TicketEvent[]>(`/tickets/${encodeURIComponent(ticketId)}/events?limit=500`),

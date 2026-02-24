@@ -75,6 +75,28 @@ class TicketMetricsOut(BaseModel):
     breached_open_total: int
 
 
+class ExecutiveTrendPoint(BaseModel):
+    day: str
+    created: int
+    closed: int
+    mttr_minutes: float
+    sla_attainment_pct: float
+
+
+class ExecutiveReportOut(BaseModel):
+    tenant_id: str
+    window_days: int
+    total_created: int
+    total_closed: int
+    sla_attainment_pct: float
+    mttr_minutes: float
+    predicted_breach_24h: int
+    automation_coverage_pct: float
+    estimated_manual_hours_saved: float
+    estimated_cost_impact: float
+    trend: list[ExecutiveTrendPoint]
+
+
 def _row_to_ticket(row, now: datetime) -> TicketOut:
     sla_due_at = row[13]
     status = row[2]
@@ -271,6 +293,102 @@ def ticket_metrics(
         avg_resolution_minutes=avg_resolution,
         at_risk_open_total=at_risk_open_total,
         breached_open_total=breached_open_total,
+    )
+
+
+@router.get("/tickets/executive-report", response_model=ExecutiveReportOut)
+def ticket_executive_report(
+    tenant_id: str = Query(..., min_length=1),
+    days: int = Query(30, ge=7, le=90),
+    _: None = Depends(require_viewer_role),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, created_at, resolved_at, sla_due_at
+            FROM tickets
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+            """,
+            (tenant_id, days),
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_decision_logs
+            WHERE tenant_id = %s
+              AND created_at >= NOW() - (%s::text || ' days')::interval
+            """,
+            (tenant_id, days),
+        )
+        automation_rows = int(cur.fetchone()[0] or 0)
+
+    now = datetime.utcnow()
+    total_created = len(rows)
+    total_closed = 0
+    within_sla_closed = 0
+    mttr_values: list[float] = []
+    predicted_breach_24h = 0
+    by_day: dict[str, dict[str, float]] = {}
+
+    for status, created_at, resolved_at, sla_due_at in rows:
+        day_key = created_at.date().isoformat()
+        if day_key not in by_day:
+            by_day[day_key] = {"created": 0, "closed": 0, "mttr_sum": 0.0, "mttr_count": 0.0, "sla_ok_closed": 0.0}
+        by_day[day_key]["created"] += 1
+
+        if sla_due_at is not None and status != "CLOSED" and sla_due_at <= now.replace(microsecond=0):
+            pass
+        if sla_due_at is not None and status != "CLOSED" and (sla_due_at - now).total_seconds() <= 86400:
+            predicted_breach_24h += 1
+
+        if resolved_at is not None:
+            total_closed += 1
+            resolution_minutes = max(0.0, (resolved_at - created_at).total_seconds() / 60.0)
+            mttr_values.append(resolution_minutes)
+            by_day[day_key]["closed"] += 1
+            by_day[day_key]["mttr_sum"] += resolution_minutes
+            by_day[day_key]["mttr_count"] += 1
+            if sla_due_at is None or resolved_at <= sla_due_at:
+                within_sla_closed += 1
+                by_day[day_key]["sla_ok_closed"] += 1
+
+    mttr_minutes = round(sum(mttr_values) / len(mttr_values), 2) if mttr_values else 0.0
+    sla_attainment_pct = round((within_sla_closed / total_closed) * 100.0, 2) if total_closed else 0.0
+    automation_coverage_pct = round((automation_rows / total_created) * 100.0, 2) if total_created else 0.0
+    estimated_manual_hours_saved = round((automation_rows * 4.0) / 60.0, 2)
+    estimated_cost_impact = round(estimated_manual_hours_saved * 45.0, 2)
+
+    trend: list[ExecutiveTrendPoint] = []
+    for day in sorted(by_day.keys()):
+        row = by_day[day]
+        mttr_day = round(row["mttr_sum"] / row["mttr_count"], 2) if row["mttr_count"] else 0.0
+        sla_day = round((row["sla_ok_closed"] / row["closed"]) * 100.0, 2) if row["closed"] else 0.0
+        trend.append(
+            ExecutiveTrendPoint(
+                day=day,
+                created=int(row["created"]),
+                closed=int(row["closed"]),
+                mttr_minutes=mttr_day,
+                sla_attainment_pct=sla_day,
+            )
+        )
+
+    return ExecutiveReportOut(
+        tenant_id=tenant_id,
+        window_days=days,
+        total_created=total_created,
+        total_closed=total_closed,
+        sla_attainment_pct=sla_attainment_pct,
+        mttr_minutes=mttr_minutes,
+        predicted_breach_24h=predicted_breach_24h,
+        automation_coverage_pct=automation_coverage_pct,
+        estimated_manual_hours_saved=estimated_manual_hours_saved,
+        estimated_cost_impact=estimated_cost_impact,
+        trend=trend[-days:],
     )
 
 
