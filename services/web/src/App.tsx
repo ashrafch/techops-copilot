@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, createApiClient, type IntakeRequest, type Ticket, type TicketStatus } from "./api";
+import {
+  ApiError,
+  createApiClient,
+  type AdminAuditLog,
+  type AdminUser,
+  type IntakeRequest,
+  type Ticket,
+  type TicketStatus,
+} from "./api";
 import "./App.css";
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
@@ -100,6 +108,18 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [showAdminSettings, setShowAdminSettings] = useState(false);
+  const [adminError, setAdminError] = useState("");
+  const [routeEmailsDraft, setRouteEmailsDraft] = useState("");
+  const [slaP1, setSlaP1] = useState("");
+  const [slaP2, setSlaP2] = useState("");
+  const [slaP3, setSlaP3] = useState("");
+  const [slaP4, setSlaP4] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserRole, setNewUserRole] = useState<"admin" | "operator" | "viewer">("operator");
+  const [newUserPassword, setNewUserPassword] = useState("ChangeMe123!");
+  const [newUserActive, setNewUserActive] = useState(true);
+  const [passwordDraftByUserId, setPasswordDraftByUserId] = useState<Record<number, string>>({});
   const [customEmailHistory, setCustomEmailHistory] = useState<string[]>(() => loadEmailHistory());
   const [createForm, setCreateForm] = useState({
     requesterName: "",
@@ -137,6 +157,8 @@ function App() {
     enabled: Boolean(accessToken),
     retry: false,
   });
+  const effectiveRole = meQuery.data?.role ?? authUser?.role ?? userRole;
+  const isAdminUser = effectiveRole === "admin";
 
   const health = useQuery({
     queryKey: ["health", baseUrl],
@@ -200,6 +222,23 @@ function App() {
     queryKey: ["tenant-email-history", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.getTenantEmailHistory(tenantId, 100),
     enabled: !enforceAuth || Boolean(accessToken),
+  });
+
+  const tenantSlaPolicy = useQuery({
+    queryKey: ["tenant-sla-policy", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getTenantSlaPolicy(tenantId),
+    enabled: isAdminUser && (!enforceAuth || Boolean(accessToken)),
+  });
+
+  const adminUsers = useQuery({
+    queryKey: ["admin-users", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAdminUsers(tenantId),
+    enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
+  });
+  const adminAuditLogs = useQuery({
+    queryKey: ["admin-audit-logs", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAdminAuditLogs(tenantId, 100),
+    enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
   });
 
   const emailHistory = useMemo(() => {
@@ -301,6 +340,94 @@ function App() {
     },
   });
 
+  const updateRouteMutation = useMutation({
+    mutationFn: (toEmailsCsv: string) => {
+      const toEmails = toEmailsCsv
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => item.length > 0);
+      return api.updateTenantRoute(tenantId, toEmails);
+    },
+    onSuccess: () => {
+      setAdminError("");
+      queryClient.invalidateQueries({ queryKey: ["tenant-route"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+
+  const updateSlaMutation = useMutation({
+    mutationFn: () =>
+      api.updateTenantSlaPolicy(tenantId, {
+        p1_minutes: Number(slaP1 || tenantSlaPolicy.data?.p1_minutes || 60),
+        p2_minutes: Number(slaP2 || tenantSlaPolicy.data?.p2_minutes || 240),
+        p3_minutes: Number(slaP3 || tenantSlaPolicy.data?.p3_minutes || 480),
+        p4_minutes: Number(slaP4 || tenantSlaPolicy.data?.p4_minutes || 1440),
+      }),
+    onSuccess: () => {
+      setAdminError("");
+      queryClient.invalidateQueries({ queryKey: ["tenant-sla-policy"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+
+  const createAdminUserMutation = useMutation({
+    mutationFn: () =>
+      api.createAdminUser({
+        email: newUserEmail.trim().toLowerCase(),
+        full_name: newUserName.trim(),
+        password: newUserPassword,
+        role: newUserRole,
+        tenant_id: tenantId,
+        is_active: newUserActive,
+      }),
+    onSuccess: () => {
+      setAdminError("");
+      setNewUserEmail("");
+      setNewUserName("");
+      setNewUserPassword("ChangeMe123!");
+      setNewUserRole("operator");
+      setNewUserActive(true);
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+
+  const toggleUserActiveMutation = useMutation({
+    mutationFn: (args: { id: number; isActive: boolean }) =>
+      api.updateAdminUser(args.id, { is_active: args.isActive }),
+    onSuccess: () => {
+      setAdminError("");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+
+  const updateAdminPasswordMutation = useMutation({
+    mutationFn: (args: { id: number; password: string }) => api.updateAdminUserPassword(args.id, args.password),
+    onSuccess: (_, args) => {
+      setAdminError("");
+      setPasswordDraftByUserId((prev) => ({ ...prev, [args.id]: "" }));
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+
+  function toggleAdminSettings() {
+    if (!showAdminSettings) {
+      setRouteEmailsDraft((tenantRoute.data?.to_emails ?? []).join(", "));
+      setSlaP1(String(tenantSlaPolicy.data?.p1_minutes ?? 60));
+      setSlaP2(String(tenantSlaPolicy.data?.p2_minutes ?? 240));
+      setSlaP3(String(tenantSlaPolicy.data?.p3_minutes ?? 480));
+      setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
+      setAdminError("");
+    }
+    setShowAdminSettings((prev) => !prev);
+  }
+
   function submitCreateTicket(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -351,8 +478,6 @@ function App() {
   const closedCount = rows.filter((t) => t.status === "CLOSED").length;
   const isAuthMissing = enforceAuth && (!accessToken || meQuery.isError);
   const activeUser = meQuery.data ?? authUser;
-  const effectiveRole = activeUser?.role ?? userRole;
-  const isAdmin = effectiveRole === "admin";
   const totalRecords = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
   const page = Math.min(currentPage, totalPages);
@@ -432,7 +557,7 @@ function App() {
               setTenantId(e.target.value);
               setCurrentPage(1);
             }}
-            disabled={enforceAuth && !isAdmin}
+            disabled={enforceAuth && !isAdminUser}
           />
         </label>
         <label>
@@ -516,49 +641,241 @@ function App() {
         </label>
       </section>
 
-      {isAdmin && (
+      {isAdminUser && (
         <section className="card admin-panel">
           <div className="admin-head">
             <h2>Admin Settings</h2>
-            <button className="secondary-button" onClick={() => setShowAdminSettings((prev) => !prev)}>
+            <button className="secondary-button" onClick={toggleAdminSettings}>
               {showAdminSettings ? "Hide" : "Show"} Technical Settings
             </button>
           </div>
           {showAdminSettings && (
-            <div className="control-panel tech-panel">
-              <label>
-                API Base URL
-                <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-              </label>
-              <label>
-                API Key
-                <input
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Optional unless API auth enabled"
-                />
-              </label>
-              <label>
-                Intake Mode
-                <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
-                  <option value="webhook">webhook (recommended)</option>
-                  <option value="api">api (/intake direct)</option>
-                </select>
-              </label>
-              <label>
-                Webhook URL
-                <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
-              </label>
-              {!enforceAuth && (
+            <div className="admin-settings-grid">
+              <div className="control-panel tech-panel">
                 <label>
-                  User Role
-                  <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
-                    <option value="admin">admin</option>
-                    <option value="operator">operator</option>
-                    <option value="viewer">viewer</option>
+                  API Base URL
+                  <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                </label>
+                <label>
+                  API Key
+                  <input
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Optional unless API auth enabled"
+                  />
+                </label>
+                <label>
+                  Intake Mode
+                  <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
+                    <option value="webhook">webhook (recommended)</option>
+                    <option value="api">api (/intake direct)</option>
                   </select>
                 </label>
-              )}
+                <label>
+                  Webhook URL
+                  <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
+                </label>
+                {!enforceAuth && (
+                  <label>
+                    User Role
+                    <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+                      <option value="admin">admin</option>
+                      <option value="operator">operator</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              <div className="admin-section">
+                <h3>Tenant Notification Routing</h3>
+                <p className="subtitle">Define default email recipients for notifications.</p>
+                <div className="inline-form">
+                  <input
+                    value={routeEmailsDraft}
+                    onChange={(e) => setRouteEmailsDraft(e.target.value)}
+                    placeholder="mail1@company.com, mail2@company.com"
+                  />
+                  <button
+                    onClick={() => updateRouteMutation.mutate(routeEmailsDraft)}
+                    disabled={updateRouteMutation.isPending}
+                  >
+                    {updateRouteMutation.isPending ? "Saving..." : "Save Routing"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-section">
+                <h3>Tenant SLA Policy (minutes)</h3>
+                <div className="inline-form">
+                  <input value={slaP1} onChange={(e) => setSlaP1(e.target.value)} placeholder="P1" />
+                  <input value={slaP2} onChange={(e) => setSlaP2(e.target.value)} placeholder="P2" />
+                  <input value={slaP3} onChange={(e) => setSlaP3(e.target.value)} placeholder="P3" />
+                  <input value={slaP4} onChange={(e) => setSlaP4(e.target.value)} placeholder="P4" />
+                  <button onClick={() => updateSlaMutation.mutate()} disabled={updateSlaMutation.isPending}>
+                    {updateSlaMutation.isPending ? "Saving..." : "Save SLA"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-section">
+                <h3>User Management</h3>
+                <div className="create-form">
+                  <label>
+                    Email
+                    <input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} />
+                  </label>
+                  <label>
+                    Full Name
+                    <input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} />
+                  </label>
+                  <label>
+                    Role
+                    <select
+                      value={newUserRole}
+                      onChange={(e) =>
+                        setNewUserRole(e.target.value as "admin" | "operator" | "viewer")
+                      }
+                    >
+                      <option value="admin">admin</option>
+                      <option value="operator">operator</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                  </label>
+                  <label>
+                    Password
+                    <input
+                      type="password"
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Active
+                    <select
+                      value={newUserActive ? "true" : "false"}
+                      onChange={(e) => setNewUserActive(e.target.value === "true")}
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </label>
+                  <div className="create-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newUserEmail.trim() || !newUserName.trim() || !newUserPassword.trim()) {
+                          setAdminError("Email, full name and password are required.");
+                          return;
+                        }
+                        createAdminUserMutation.mutate();
+                      }}
+                      disabled={createAdminUserMutation.isPending}
+                    >
+                      {createAdminUserMutation.isPending ? "Creating..." : "Create User"}
+                    </button>
+                  </div>
+                </div>
+
+                {adminUsers.isLoading && <p>Loading users...</p>}
+                {adminUsers.isError && <p className="error">{getErrorMessage(adminUsers.error)}</p>}
+                {!!adminUsers.data?.length && (
+                  <table className="admin-users-table">
+                    <thead>
+                      <tr>
+                        <th>Email</th>
+                        <th>Name</th>
+                        <th>Role</th>
+                        <th>Active</th>
+                        <th>Password Reset</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsers.data.map((user: AdminUser) => (
+                        <tr key={user.id}>
+                          <td>{user.email}</td>
+                          <td>{user.full_name}</td>
+                          <td>{user.role}</td>
+                          <td>
+                            <button
+                              className="secondary-button"
+                              onClick={() =>
+                                toggleUserActiveMutation.mutate({
+                                  id: user.id,
+                                  isActive: !user.is_active,
+                                })
+                              }
+                              disabled={toggleUserActiveMutation.isPending}
+                            >
+                              {user.is_active ? "Disable" : "Enable"}
+                            </button>
+                          </td>
+                          <td>
+                            <div className="inline-form">
+                              <input
+                                type="password"
+                                value={passwordDraftByUserId[user.id] ?? ""}
+                                placeholder="New password"
+                                onChange={(e) =>
+                                  setPasswordDraftByUserId((prev) => ({
+                                    ...prev,
+                                    [user.id]: e.target.value,
+                                  }))
+                                }
+                              />
+                              <button
+                                onClick={() => {
+                                  const password = (passwordDraftByUserId[user.id] ?? "").trim();
+                                  if (password.length < 8) {
+                                    setAdminError("Password must be at least 8 characters.");
+                                    return;
+                                  }
+                                  updateAdminPasswordMutation.mutate({ id: user.id, password });
+                                }}
+                                disabled={updateAdminPasswordMutation.isPending}
+                              >
+                                Reset
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="admin-section">
+                <h3>Recent Admin Audit</h3>
+                {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
+                {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
+                {!!adminAuditLogs.data?.length && (
+                  <table className="admin-users-table">
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Actor</th>
+                        <th>Action</th>
+                        <th>Target</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminAuditLogs.data.map((row: AdminAuditLog) => (
+                        <tr key={row.id}>
+                          <td>{formatDate(row.created_at)}</td>
+                          <td>{row.actor_email}</td>
+                          <td>{row.action}</td>
+                          <td>
+                            {row.target_type}:{row.target_id}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {adminError && <p className="error">{adminError}</p>}
             </div>
           )}
         </section>

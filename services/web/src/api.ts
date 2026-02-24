@@ -75,6 +75,37 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
+export interface AdminUser {
+  id: number;
+  email: string;
+  full_name: string;
+  role: "admin" | "operator" | "viewer";
+  tenant_id: string;
+  is_active: boolean;
+  updated_at: string;
+}
+
+export interface TenantSlaPolicy {
+  tenant_id: string;
+  p1_minutes: number;
+  p2_minutes: number;
+  p3_minutes: number;
+  p4_minutes: number;
+  updated_at: string;
+}
+
+export interface AdminAuditLog {
+  id: number;
+  tenant_id: string;
+  actor_email: string;
+  actor_role: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface IntakeRequest {
   tenant_id: string;
   source?: string;
@@ -261,6 +292,40 @@ export function createApiClient(options: ApiClientOptions) {
     getTenantEmailHistory: (tenantId: string, limit = 50) =>
       getJson<TenantEmailHistoryItem[]>(
         `/tenant-email-history?tenant_id=${encodeURIComponent(tenantId)}&limit=${limit}`,
+      ),
+    getTenantSlaPolicy: (tenantId: string) =>
+      getJson<TenantSlaPolicy>(`/tenant-sla-policies/${encodeURIComponent(tenantId)}`),
+    updateTenantSlaPolicy: (
+      tenantId: string,
+      payload: { p1_minutes: number; p2_minutes: number; p3_minutes: number; p4_minutes: number },
+    ) =>
+      patchJson<TenantSlaPolicy>(`/tenant-sla-policies/${encodeURIComponent(tenantId)}`, payload),
+    listAdminUsers: (tenantId = "") =>
+      getJson<AdminUser[]>(
+        `/admin/users${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,
+      ),
+    createAdminUser: (payload: {
+      email: string;
+      full_name: string;
+      password: string;
+      role: "admin" | "operator" | "viewer";
+      tenant_id: string;
+      is_active: boolean;
+    }) => postJson<AdminUser>("/admin/users", payload),
+    updateAdminUser: (
+      userId: number,
+      payload: Partial<{
+        full_name: string;
+        role: "admin" | "operator" | "viewer";
+        tenant_id: string;
+        is_active: boolean;
+      }>,
+    ) => patchJson<AdminUser>(`/admin/users/${userId}`, payload),
+    updateAdminUserPassword: (userId: number, password: string) =>
+      patchJson<{ ok: boolean }>(`/admin/users/${userId}/password`, { password }),
+    listAdminAuditLogs: (tenantId = "", limit = 100) =>
+      getJson<AdminAuditLog[]>(
+        `/admin/audit-logs?limit=${limit}${tenantId ? `&tenant_id=${encodeURIComponent(tenantId)}` : ""}`,
       ),
   };
 }
