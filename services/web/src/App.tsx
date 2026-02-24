@@ -199,6 +199,11 @@ function App() {
     queryFn: () => api.getQueueSummary(tenantId, myAssigneeEmail),
     enabled: !enforceAuth || Boolean(accessToken),
   });
+  const ticketMetrics = useQuery({
+    queryKey: ["ticket-metrics", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getTicketMetrics(tenantId),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
 
   const selectedTicket = useQuery({
     queryKey: ["ticket", baseUrl, apiKey, accessToken, userRole, selectedTicketId],
@@ -257,6 +262,8 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
     },
   });
 
@@ -268,6 +275,8 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
     },
     onError: (error) => setAssignError(getErrorMessage(error)),
   });
@@ -280,6 +289,8 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
     },
     onError: (error) => setStatusError(getErrorMessage(error)),
   });
@@ -323,6 +334,8 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["ticket"] });
       queryClient.invalidateQueries({ queryKey: ["events"] });
       queryClient.invalidateQueries({ queryKey: ["tenant-email-history"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
       setNotificationEmail("");
       setCreateForm({
         requesterName: "",
@@ -634,7 +647,11 @@ function App() {
           Actions
           <button
             className="secondary-button"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["tickets"] })}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ["tickets"] });
+              queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+              queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+            }}
           >
             Refresh Inbox
           </button>
@@ -1000,6 +1017,9 @@ function App() {
               <span>Unassigned: {queueSummary.data?.unassigned_total ?? "-"}</span>
               <span>At Risk: {queueSummary.data?.at_risk_total ?? "-"}</span>
               <span>Breached: {queueSummary.data?.breached_total ?? "-"}</span>
+              <span>Created 24h: {ticketMetrics.data?.created_last_24h ?? "-"}</span>
+              <span>Closed 24h: {ticketMetrics.data?.closed_last_24h ?? "-"}</span>
+              <span>Avg Resolve (min): {ticketMetrics.data?.avg_resolution_minutes ?? "-"}</span>
             </div>
           </div>
           {tickets.isLoading && <p>Loading tickets...</p>}

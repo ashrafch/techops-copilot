@@ -57,6 +57,19 @@ export interface QueueSummary {
   breached_total: number;
 }
 
+export interface TicketMetrics {
+  open_total: number;
+  in_progress_total: number;
+  waiting_total: number;
+  resolved_total: number;
+  closed_total: number;
+  created_last_24h: number;
+  closed_last_24h: number;
+  avg_resolution_minutes: number;
+  at_risk_open_total: number;
+  breached_open_total: number;
+}
+
 export interface ApiStatus {
   status: string;
 }
@@ -256,6 +269,8 @@ export function createApiClient(options: ApiClientOptions) {
       getJson<QueueSummary>(
         `/tickets/queue-summary?tenant_id=${encodeURIComponent(tenantId)}&assignee_email=${encodeURIComponent(assigneeEmail)}`,
       ),
+    getTicketMetrics: (tenantId: string) =>
+      getJson<TicketMetrics>(`/tickets/metrics?tenant_id=${encodeURIComponent(tenantId)}`),
     getTicket: (ticketId: string) => getJson<Ticket>(`/tickets/${encodeURIComponent(ticketId)}`),
     getTicketEvents: (ticketId: string) =>
       getJson<TicketEvent[]>(`/tickets/${encodeURIComponent(ticketId)}/events?limit=500`),

@@ -61,6 +61,19 @@ class QueueSummaryOut(BaseModel):
     breached_total: int
 
 
+class TicketMetricsOut(BaseModel):
+    open_total: int
+    in_progress_total: int
+    waiting_total: int
+    resolved_total: int
+    closed_total: int
+    created_last_24h: int
+    closed_last_24h: int
+    avg_resolution_minutes: float
+    at_risk_open_total: int
+    breached_open_total: int
+
+
 def _row_to_ticket(row, now: datetime) -> TicketOut:
     sla_due_at = row[13]
     status = row[2]
@@ -182,6 +195,75 @@ def queue_summary(
         my_total=my_total,
         at_risk_total=at_risk_total,
         breached_total=breached_total,
+    )
+
+
+@router.get("/tickets/metrics", response_model=TicketMetricsOut)
+def ticket_metrics(
+    tenant_id: str = Query(..., min_length=1),
+    _: None = Depends(require_viewer_role),
+):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, created_at, resolved_at, sla_due_at
+            FROM tickets
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        rows = cur.fetchall()
+
+    now = datetime.utcnow()
+    open_total = 0
+    in_progress_total = 0
+    waiting_total = 0
+    resolved_total = 0
+    closed_total = 0
+    created_last_24h = 0
+    closed_last_24h = 0
+    resolution_minutes: list[float] = []
+    at_risk_open_total = 0
+    breached_open_total = 0
+
+    for status, created_at, resolved_at, sla_due_at in rows:
+        if status == "OPEN":
+            open_total += 1
+        elif status == "IN_PROGRESS":
+            in_progress_total += 1
+        elif status == "WAITING":
+            waiting_total += 1
+        elif status == "RESOLVED":
+            resolved_total += 1
+        elif status == "CLOSED":
+            closed_total += 1
+
+        if (now - created_at).total_seconds() <= 86400:
+            created_last_24h += 1
+
+        if resolved_at is not None:
+            if (now - resolved_at).total_seconds() <= 86400:
+                closed_last_24h += 1
+            resolution_minutes.append((resolved_at - created_at).total_seconds() / 60.0)
+
+        sla_state = compute_sla_state(status=status, sla_due_at=sla_due_at, now=now)
+        if sla_state == "AT_RISK":
+            at_risk_open_total += 1
+        elif sla_state == "BREACHED":
+            breached_open_total += 1
+
+    avg_resolution = round(sum(resolution_minutes) / len(resolution_minutes), 2) if resolution_minutes else 0.0
+    return TicketMetricsOut(
+        open_total=open_total,
+        in_progress_total=in_progress_total,
+        waiting_total=waiting_total,
+        resolved_total=resolved_total,
+        closed_total=closed_total,
+        created_last_24h=created_last_24h,
+        closed_last_24h=closed_last_24h,
+        avg_resolution_minutes=avg_resolution,
+        at_risk_open_total=at_risk_open_total,
+        breached_open_total=breached_open_total,
     )
 
 
