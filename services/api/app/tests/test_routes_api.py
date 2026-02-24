@@ -76,6 +76,7 @@ def test_get_and_patch_tenant_automation_policy():
     read = client.get("/tenant-automation-policies/demo")
     assert read.status_code == 200
     assert read.json()["tenant_id"] == "demo"
+    assert "action_webhook_url" in read.json()
 
     patch = client.patch(
         "/tenant-automation-policies/demo",
@@ -84,6 +85,8 @@ def test_get_and_patch_tenant_automation_policy():
             "at_risk_lead_minutes": 30,
             "auto_assign_name": "Automation Dispatcher",
             "auto_assign_email": "dispatch@example.com",
+            "action_webhook_url": "https://example.com/agent-hook",
+            "action_webhook_token": "temp-token",
         },
     )
     assert patch.status_code == 200
@@ -91,6 +94,7 @@ def test_get_and_patch_tenant_automation_policy():
     assert payload["correlation_window_minutes"] == 120
     assert payload["at_risk_lead_minutes"] == 30
     assert payload["auto_assign_email"] == "dispatch@example.com"
+    assert payload["action_webhook_url"] == "https://example.com/agent-hook"
 
 
 def test_admin_audit_logs_include_route_and_sla_updates(monkeypatch):
@@ -119,6 +123,8 @@ def test_admin_audit_logs_include_route_and_sla_updates(monkeypatch):
             "at_risk_lead_minutes": 45,
             "auto_assign_name": "Automation Dispatcher",
             "auto_assign_email": "dispatch@example.com",
+            "action_webhook_url": "",
+            "action_webhook_token": "",
         },
         headers={"X-User-Role": "admin"},
     )

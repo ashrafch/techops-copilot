@@ -55,6 +55,7 @@ class TenantAutomationPolicyOut(BaseModel):
     at_risk_lead_minutes: int
     auto_assign_name: str
     auto_assign_email: Optional[EmailStr] = None
+    action_webhook_url: str
     updated_at: datetime
 
 
@@ -63,6 +64,8 @@ class TenantAutomationPolicyUpdate(BaseModel):
     at_risk_lead_minutes: int = Field(ge=1, le=10080)
     auto_assign_name: str = Field(default="", max_length=255)
     auto_assign_email: Optional[EmailStr] = None
+    action_webhook_url: str = Field(default="", max_length=2048)
+    action_webhook_token: str = Field(default="", max_length=2048)
 
 
 def _csv_to_list(value: str) -> list[str]:
@@ -302,7 +305,7 @@ def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewe
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, updated_at
+            SELECT tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
             FROM tenant_automation_policies
             WHERE tenant_id = %s
             """,
@@ -318,7 +321,8 @@ def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewe
         at_risk_lead_minutes=row[2],
         auto_assign_name=row[3] or "",
         auto_assign_email=row[4] or None,
-        updated_at=row[5],
+        action_webhook_url=row[5] or "",
+        updated_at=row[6],
     )
 
 
@@ -338,16 +342,19 @@ def update_tenant_automation_policy(
                 cur.execute(
                     """
                     INSERT INTO tenant_automation_policies (
-                      tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email
+                      tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email,
+                      action_webhook_url, action_webhook_token
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (tenant_id) DO UPDATE SET
                       correlation_window_minutes = EXCLUDED.correlation_window_minutes,
                       at_risk_lead_minutes = EXCLUDED.at_risk_lead_minutes,
                       auto_assign_name = EXCLUDED.auto_assign_name,
                       auto_assign_email = EXCLUDED.auto_assign_email,
+                      action_webhook_url = EXCLUDED.action_webhook_url,
+                      action_webhook_token = EXCLUDED.action_webhook_token,
                       updated_at = NOW()
-                    RETURNING tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, updated_at
+                    RETURNING tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
                     """,
                     (
                         tenant_id,
@@ -355,6 +362,8 @@ def update_tenant_automation_policy(
                         payload.at_risk_lead_minutes,
                         payload.auto_assign_name.strip(),
                         str(payload.auto_assign_email).strip().lower() if payload.auto_assign_email else "",
+                        payload.action_webhook_url.strip(),
+                        payload.action_webhook_token.strip(),
                     ),
                 )
                 row = cur.fetchone()
@@ -371,6 +380,7 @@ def update_tenant_automation_policy(
                         "at_risk_lead_minutes": row[2],
                         "auto_assign_name": row[3] or "",
                         "auto_assign_email": row[4] or None,
+                        "action_webhook_url": row[5] or "",
                     },
                 )
             conn.commit()
@@ -384,5 +394,6 @@ def update_tenant_automation_policy(
         at_risk_lead_minutes=row[2],
         auto_assign_name=row[3] or "",
         auto_assign_email=row[4] or None,
-        updated_at=row[5],
+        action_webhook_url=row[5] or "",
+        updated_at=row[6],
     )

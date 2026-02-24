@@ -80,6 +80,8 @@ $automationBody = @{
   at_risk_lead_minutes = 60
   auto_assign_name = "Automation Dispatcher"
   auto_assign_email = "dispatch@example.com"
+  action_webhook_url = ""
+  action_webhook_token = ""
 } | ConvertTo-Json
 $automationResp = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tenant-automation-policies/$tenantId" -Headers $headers -ContentType "application/json" -Body $automationBody
 Assert-True -Condition ($automationResp.correlation_window_minutes -eq 240) -Message "Automation policy update failed."
