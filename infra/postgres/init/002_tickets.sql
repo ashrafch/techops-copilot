@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS tickets (
   machine_line TEXT NOT NULL DEFAULT '',
   machine_station TEXT NOT NULL DEFAULT '',
   machine_serial TEXT NOT NULL DEFAULT '',
+  sla_due_at TIMESTAMP NULL,
+  first_response_at TIMESTAMP NULL,
+  resolved_at TIMESTAMP NULL,
 
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -35,5 +38,6 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE INDEX IF NOT EXISTS idx_tickets_tenant_created ON tickets (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tickets_status_created ON tickets (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tickets_assignee_email ON tickets (assignee_email);
+CREATE INDEX IF NOT EXISTS idx_tickets_sla_due_at ON tickets (sla_due_at);
 
 -- Trigger-like: aggiorna updated_at automaticamente (senza trigger, lo faremo da API per semplicità)

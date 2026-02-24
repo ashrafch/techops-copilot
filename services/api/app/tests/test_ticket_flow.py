@@ -29,7 +29,10 @@ def test_ticket_flow_and_close_idempotency():
 
     ticket = client.get(f"/tickets/{ticket_id}")
     assert ticket.status_code == 200
-    assert ticket.json()["status"] == "OPEN"
+    ticket_payload = ticket.json()
+    assert ticket_payload["status"] == "OPEN"
+    assert ticket_payload["sla_due_at"] is not None
+    assert ticket_payload["sla_state"] in {"ON_TIME", "AT_RISK"}
 
     events_before_close = client.get(f"/tickets/{ticket_id}/events")
     assert events_before_close.status_code == 200

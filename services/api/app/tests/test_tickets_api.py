@@ -87,3 +87,20 @@ def test_update_ticket_status_and_assignment():
     assert payload["status"] == "IN_PROGRESS"
     assert payload["assignee_name"] == "Ops User"
     assert payload["assignee_email"] == "ops.user@example.com"
+    assert payload["first_response_at"] is not None
+
+
+def test_add_note_and_queue_summary():
+    client = TestClient(app)
+    ticket_id = _intake(client, subject="Queue summary and notes")
+
+    note = client.post(f"/tickets/{ticket_id}/notes", json={"message": "Investigating root cause"})
+    assert note.status_code == 200
+    assert note.json()["ok"] is True
+
+    summary = client.get("/tickets/queue-summary", params={"tenant_id": "demo"})
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["open_total"] >= 1
+    assert "at_risk_total" in payload
+    assert "breached_total" in payload

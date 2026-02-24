@@ -105,6 +105,7 @@ services:
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${API_PORT}}
       VITE_API_KEY: ${VITE_API_KEY:-}
+      VITE_USER_ROLE: ${VITE_USER_ROLE:-operator}
     ports:
       - "${WEB_PORT:-5173}:5173"
     depends_on:

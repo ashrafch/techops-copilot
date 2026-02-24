@@ -277,8 +277,18 @@ Workflow ticket enterprise (in sviluppo):
 - assegnazione owner ticket:
   - `PATCH /tickets/{ticket_id}/assign` con body `{"assignee_name":"...","assignee_email":"..."}`
   - `PATCH /tickets/{ticket_id}/status` con body `{"status":"IN_PROGRESS"}`
+- note operative:
+  - `POST /tickets/{ticket_id}/notes` con body `{"message":"..."}`
+- SLA:
+  - policy per tenant (`tenant_sla_policies`)
+  - campi ticket: `sla_due_at`, `first_response_at`, `resolved_at`, `sla_state`
+  - summary coda: `GET /tickets/queue-summary?tenant_id=<id>&assignee_email=<email>`
 
 Migrazioni DB idempotenti:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1
 ```
+
+Hardening affidabilita' workflow n8n:
+- guida: `n8n/docs/reliability_hardening.md`
+- script patch automatico: `scripts/patch_n8n_reliability.ps1`

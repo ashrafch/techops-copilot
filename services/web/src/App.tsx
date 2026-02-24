@@ -5,6 +5,7 @@ import "./App.css";
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
 const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY ?? "";
+const DEFAULT_USER_ROLE = import.meta.env.VITE_USER_ROLE ?? "operator";
 const DEFAULT_WEBHOOK_URL =
   import.meta.env.VITE_WEBHOOK_URL ?? "http://localhost:5678/webhook/ticket-intake";
 const DEFAULT_INTAKE_MODE = import.meta.env.VITE_INTAKE_MODE ?? "webhook";
@@ -45,19 +46,24 @@ function getErrorMessage(error: unknown): string {
 function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
+  const [userRole, setUserRole] = useState(DEFAULT_USER_ROLE);
   const [webhookUrl, setWebhookUrl] = useState(DEFAULT_WEBHOOK_URL);
   const [intakeMode, setIntakeMode] = useState(DEFAULT_INTAKE_MODE);
   const [tenantId, setTenantId] = useState("demo");
   const [statusFilter, setStatusFilter] = useState("OPEN");
+  const [queueMode, setQueueMode] = useState("ALL");
+  const [myAssigneeEmail, setMyAssigneeEmail] = useState("");
   const [selectedTicketId, setSelectedTicketId] = useState<string>("");
   const [searchText, setSearchText] = useState("");
   const [createError, setCreateError] = useState("");
   const [assignError, setAssignError] = useState("");
   const [statusError, setStatusError] = useState("");
+  const [noteError, setNoteError] = useState("");
   const [notificationEmail, setNotificationEmail] = useState("");
   const [assigneeName, setAssigneeName] = useState("");
   const [assigneeEmail, setAssigneeEmail] = useState("");
   const [nextStatus, setNextStatus] = useState<TicketStatus>("OPEN");
+  const [noteText, setNoteText] = useState("");
   const [customEmailHistory, setCustomEmailHistory] = useState<string[]>(() => loadEmailHistory());
   const [createForm, setCreateForm] = useState({
     requesterName: "",
@@ -72,8 +78,8 @@ function App() {
 
   const queryClient = useQueryClient();
   const api = useMemo(
-    () => createApiClient({ baseUrl, apiKey, webhookUrl }),
-    [baseUrl, apiKey, webhookUrl],
+    () => createApiClient({ baseUrl, apiKey, webhookUrl, userRole }),
+    [baseUrl, apiKey, webhookUrl, userRole],
   );
 
   const health = useQuery({
@@ -87,8 +93,21 @@ function App() {
   });
 
   const tickets = useQuery({
-    queryKey: ["tickets", baseUrl, apiKey, tenantId, statusFilter],
-    queryFn: () => api.listTickets(tenantId, statusFilter),
+    queryKey: ["tickets", baseUrl, apiKey, tenantId, statusFilter, queueMode, myAssigneeEmail],
+    queryFn: () =>
+      api.listTickets(tenantId, statusFilter, {
+        assigneeEmail: queueMode === "MY" ? myAssigneeEmail : "",
+        onlyUnassigned: queueMode === "UNASSIGNED",
+        slaState:
+          queueMode === "AT_RISK" || queueMode === "BREACHED"
+            ? (queueMode as "AT_RISK" | "BREACHED")
+            : "ALL",
+      }),
+  });
+
+  const queueSummary = useQuery({
+    queryKey: ["queue-summary", baseUrl, apiKey, tenantId, myAssigneeEmail],
+    queryFn: () => api.getQueueSummary(tenantId, myAssigneeEmail),
   });
 
   const selectedTicket = useQuery({
@@ -154,6 +173,17 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["events"] });
     },
     onError: (error) => setStatusError(getErrorMessage(error)),
+  });
+
+  const noteMutation = useMutation({
+    mutationFn: (args: { ticketId: string; message: string }) =>
+      api.addTicketNote(args.ticketId, args.message),
+    onSuccess: () => {
+      setNoteError("");
+      setNoteText("");
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+    },
+    onError: (error) => setNoteError(getErrorMessage(error)),
   });
 
   const createMutation = useMutation({
@@ -307,6 +337,32 @@ function App() {
           </select>
         </label>
         <label>
+          User Role
+          <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+            <option value="admin">admin</option>
+            <option value="operator">operator</option>
+            <option value="viewer">viewer</option>
+          </select>
+        </label>
+        <label>
+          Queue
+          <select value={queueMode} onChange={(e) => setQueueMode(e.target.value)}>
+            <option value="ALL">ALL</option>
+            <option value="MY">MY_TICKETS</option>
+            <option value="UNASSIGNED">UNASSIGNED</option>
+            <option value="AT_RISK">AT_RISK</option>
+            <option value="BREACHED">BREACHED</option>
+          </select>
+        </label>
+        <label>
+          My Assignee Email
+          <input
+            value={myAssigneeEmail}
+            onChange={(e) => setMyAssigneeEmail(e.target.value)}
+            placeholder="For MY queue"
+          />
+        </label>
+        <label>
           Search
           <input
             value={searchText}
@@ -440,6 +496,9 @@ function App() {
               <span>Open: {openCount}</span>
               <span>Closed: {closedCount}</span>
               <span>Total: {rows.length}</span>
+              <span>Unassigned: {queueSummary.data?.unassigned_total ?? "-"}</span>
+              <span>At Risk: {queueSummary.data?.at_risk_total ?? "-"}</span>
+              <span>Breached: {queueSummary.data?.breached_total ?? "-"}</span>
             </div>
           </div>
           {tickets.isLoading && <p>Loading tickets...</p>}
@@ -451,6 +510,8 @@ function App() {
                   <th>ID</th>
                   <th>Priority</th>
                   <th>Status</th>
+                  <th>SLA</th>
+                  <th>Assignee</th>
                   <th>Subject</th>
                   <th>Created</th>
                 </tr>
@@ -465,6 +526,8 @@ function App() {
                     <td>{ticket.ticket_id}</td>
                     <td>{ticket.priority}</td>
                     <td>{ticket.status}</td>
+                    <td>{ticket.sla_state}</td>
+                    <td>{ticket.assignee_email || "-"}</td>
                     <td>{ticket.subject}</td>
                     <td>{formatDate(ticket.created_at)}</td>
                   </tr>
@@ -501,6 +564,8 @@ function App() {
                   Assignee: {selectedTicket.data.assignee_name || "-"} /{" "}
                   {selectedTicket.data.assignee_email || "-"}
                 </p>
+                <p>SLA Due: {selectedTicket.data.sla_due_at ? formatDate(selectedTicket.data.sla_due_at) : "-"}</p>
+                <p>SLA State: {selectedTicket.data.sla_state}</p>
                 <p>
                   Machine: {selectedTicket.data.machine_line}/{selectedTicket.data.machine_station}/
                   {selectedTicket.data.machine_serial}
@@ -559,6 +624,26 @@ function App() {
                   </button>
                 </div>
                 {statusError && <p className="error">{statusError}</p>}
+                <h3>Add Note</h3>
+                <div className="inline-form">
+                  <input
+                    placeholder="Write operational note"
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                  />
+                  <button
+                    onClick={() =>
+                      noteMutation.mutate({
+                        ticketId: selectedTicket.data.ticket_id,
+                        message: noteText.trim(),
+                      })
+                    }
+                    disabled={noteMutation.isPending || !noteText.trim()}
+                  >
+                    {noteMutation.isPending ? "Saving..." : "Add Note"}
+                  </button>
+                </div>
+                {noteError && <p className="error">{noteError}</p>}
               </div>
               <h3>Timeline</h3>
               {selectedEvents.isLoading && <p>Loading timeline...</p>}

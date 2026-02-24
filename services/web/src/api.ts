@@ -16,6 +16,10 @@ export interface Ticket {
   machine_line: string;
   machine_station: string;
   machine_serial: string;
+  sla_due_at: string | null;
+  first_response_at: string | null;
+  resolved_at: string | null;
+  sla_state: "ON_TIME" | "AT_RISK" | "BREACHED" | "NO_SLA" | "CLOSED";
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +47,14 @@ export interface TenantRoute {
 export interface TenantEmailHistoryItem {
   email: string;
   last_used_at: string;
+}
+
+export interface QueueSummary {
+  open_total: number;
+  unassigned_total: number;
+  my_total: number;
+  at_risk_total: number;
+  breached_total: number;
 }
 
 export interface ApiStatus {
@@ -91,6 +103,7 @@ interface ApiClientOptions {
   baseUrl: string;
   apiKey?: string;
   webhookUrl?: string;
+  userRole?: string;
 }
 
 class ApiError extends Error {
@@ -106,9 +119,10 @@ function withTrailingSlashRemoved(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function createHeaders(apiKey?: string): HeadersInit {
+function createHeaders(apiKey?: string, userRole?: string): HeadersInit {
   const headers: Record<string, string> = {};
   if (apiKey) headers["X-API-Key"] = apiKey;
+  if (userRole) headers["X-User-Role"] = userRole;
   return headers;
 }
 
@@ -124,7 +138,7 @@ async function parseError(response: Response): Promise<never> {
 export function createApiClient(options: ApiClientOptions) {
   const baseUrl = withTrailingSlashRemoved(options.baseUrl);
   const webhookUrl = options.webhookUrl ? withTrailingSlashRemoved(options.webhookUrl) : "";
-  const headers = createHeaders(options.apiKey);
+  const headers = createHeaders(options.apiKey, options.userRole);
 
   async function getJson<T>(path: string): Promise<T> {
     const response = await fetch(`${baseUrl}${path}`, { headers });
@@ -169,12 +183,29 @@ export function createApiClient(options: ApiClientOptions) {
   return {
     health: () => getJson<ApiStatus>("/health"),
     ready: () => getJson<ApiStatus>("/ready"),
-    listTickets: (tenantId: string, status: string) => {
+    listTickets: (
+      tenantId: string,
+      status: string,
+      options?: {
+        assigneeEmail?: string;
+        onlyUnassigned?: boolean;
+        slaState?: "ALL" | "ON_TIME" | "AT_RISK" | "BREACHED";
+      },
+    ) => {
       const statusParam = status === "ALL" ? "" : `&status=${status}`;
+      const assigneeParam = options?.assigneeEmail
+        ? `&assignee_email=${encodeURIComponent(options.assigneeEmail)}`
+        : "";
+      const unassignedParam = options?.onlyUnassigned ? "&only_unassigned=true" : "";
+      const slaStateParam = options?.slaState ? `&sla_state=${options.slaState}` : "";
       return getJson<Ticket[]>(
-        `/tickets?tenant_id=${encodeURIComponent(tenantId)}${statusParam}&limit=200`,
+        `/tickets?tenant_id=${encodeURIComponent(tenantId)}${statusParam}${assigneeParam}${unassignedParam}${slaStateParam}&limit=200`,
       );
     },
+    getQueueSummary: (tenantId: string, assigneeEmail = "") =>
+      getJson<QueueSummary>(
+        `/tickets/queue-summary?tenant_id=${encodeURIComponent(tenantId)}&assignee_email=${encodeURIComponent(assigneeEmail)}`,
+      ),
     getTicket: (ticketId: string) => getJson<Ticket>(`/tickets/${encodeURIComponent(ticketId)}`),
     getTicketEvents: (ticketId: string) =>
       getJson<TicketEvent[]>(`/tickets/${encodeURIComponent(ticketId)}/events?limit=500`),
@@ -192,6 +223,8 @@ export function createApiClient(options: ApiClientOptions) {
         `/tickets/${encodeURIComponent(ticketId)}/assign`,
         { assignee_name: assigneeName, assignee_email: assigneeEmail },
       ),
+    addTicketNote: (ticketId: string, message: string) =>
+      postJson<{ ok: boolean }>(`/tickets/${encodeURIComponent(ticketId)}/notes`, { message }),
     createTicket: (payload: IntakeRequest) => postJson<IntakeResponse>("/intake", payload),
     createTicketViaWebhook: (payload: IntakeRequest, notificationEmail?: string) => {
       const webhookPayload: WebhookIntakeRequest = { ...payload };

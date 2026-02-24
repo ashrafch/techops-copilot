@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.auth import require_api_key
+from app.core.rbac import require_admin_role, require_viewer_role
 from app.db.session import get_conn
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -30,6 +31,22 @@ class EmailHistoryItem(BaseModel):
     last_used_at: datetime
 
 
+class TenantSlaPolicyOut(BaseModel):
+    tenant_id: str
+    p1_minutes: int
+    p2_minutes: int
+    p3_minutes: int
+    p4_minutes: int
+    updated_at: datetime
+
+
+class TenantSlaPolicyUpdate(BaseModel):
+    p1_minutes: int = Field(ge=1, le=10080)
+    p2_minutes: int = Field(ge=1, le=10080)
+    p3_minutes: int = Field(ge=1, le=10080)
+    p4_minutes: int = Field(ge=1, le=10080)
+
+
 def _csv_to_list(value: str) -> list[str]:
     if not value:
         return []
@@ -48,7 +65,7 @@ def _list_to_csv(values: list[str]) -> str:
 
 
 @router.get("/tenant-routes/{tenant_id}", response_model=TenantRouteOut)
-def get_tenant_route(tenant_id: str):
+def get_tenant_route(tenant_id: str, _: None = Depends(require_viewer_role)):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -76,7 +93,11 @@ def get_tenant_route(tenant_id: str):
 
 
 @router.patch("/tenant-routes/{tenant_id}", response_model=TenantRouteOut)
-def update_tenant_route(tenant_id: str, payload: TenantRouteUpdate):
+def update_tenant_route(
+    tenant_id: str,
+    payload: TenantRouteUpdate,
+    _: None = Depends(require_admin_role),
+):
     to_csv = _list_to_csv([str(item) for item in payload.to_emails])
     if not to_csv:
         raise HTTPException(status_code=422, detail="to_emails must contain at least one email")
@@ -118,6 +139,7 @@ def update_tenant_route(tenant_id: str, payload: TenantRouteUpdate):
 def list_tenant_email_history(
     tenant_id: str = Query(..., min_length=1),
     limit: int = Query(50, ge=1, le=200),
+    _: None = Depends(require_viewer_role),
 ):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -151,3 +173,74 @@ def list_tenant_email_history(
         rows = cur.fetchall()
 
     return [EmailHistoryItem(email=row[0], last_used_at=row[1]) for row in rows]
+
+
+@router.get("/tenant-sla-policies/{tenant_id}", response_model=TenantSlaPolicyOut)
+def get_tenant_sla_policy(tenant_id: str, _: None = Depends(require_viewer_role)):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tenant_id, p1_minutes, p2_minutes, p3_minutes, p4_minutes, updated_at
+            FROM tenant_sla_policies
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        row = cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tenant SLA policy not found")
+    return TenantSlaPolicyOut(
+        tenant_id=row[0],
+        p1_minutes=row[1],
+        p2_minutes=row[2],
+        p3_minutes=row[3],
+        p4_minutes=row[4],
+        updated_at=row[5],
+    )
+
+
+@router.patch("/tenant-sla-policies/{tenant_id}", response_model=TenantSlaPolicyOut)
+def update_tenant_sla_policy(
+    tenant_id: str,
+    payload: TenantSlaPolicyUpdate,
+    _: None = Depends(require_admin_role),
+):
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tenant_sla_policies (tenant_id, p1_minutes, p2_minutes, p3_minutes, p4_minutes)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                      p1_minutes = EXCLUDED.p1_minutes,
+                      p2_minutes = EXCLUDED.p2_minutes,
+                      p3_minutes = EXCLUDED.p3_minutes,
+                      p4_minutes = EXCLUDED.p4_minutes,
+                      updated_at = NOW()
+                    RETURNING tenant_id, p1_minutes, p2_minutes, p3_minutes, p4_minutes, updated_at
+                    """,
+                    (
+                        tenant_id,
+                        payload.p1_minutes,
+                        payload.p2_minutes,
+                        payload.p3_minutes,
+                        payload.p4_minutes,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return TenantSlaPolicyOut(
+        tenant_id=row[0],
+        p1_minutes=row[1],
+        p2_minutes=row[2],
+        p3_minutes=row[3],
+        p4_minutes=row[4],
+        updated_at=row[5],
+    )

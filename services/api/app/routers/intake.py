@@ -7,6 +7,7 @@ from app.core.auth import require_api_key
 from app.core.rbac import require_operator_role
 from app.db.session import get_conn
 from app.db.events import log_event  # NEW
+from app.domain.sla_service import compute_sla_due_at, get_sla_minutes_for_priority
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -61,6 +62,8 @@ def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
         try:
             ticket_id = _next_ticket_id(conn)
             now = datetime.utcnow()
+            sla_minutes = get_sla_minutes_for_priority(conn, req.tenant_id, req.priority)
+            sla_due_at = compute_sla_due_at(now, sla_minutes)
 
             with conn.cursor() as cur:
                 cur.execute(
@@ -70,15 +73,17 @@ def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
                       subject, priority, description_raw,
                       requester_name, requester_email,
                       machine_line, machine_station, machine_serial,
+                      sla_due_at, first_response_at, resolved_at,
                       created_at, updated_at
                     )
-                    VALUES (%s,%s,'OPEN', %s,%s,%s, %s,%s, %s,%s,%s, %s,%s)
+                    VALUES (%s,%s,'OPEN', %s,%s,%s, %s,%s, %s,%s,%s, %s,NULL,NULL, %s,%s)
                     """,
                     (
                         ticket_id, req.tenant_id,
                         req.subject, req.priority, req.description_raw,
                         req.requester.name, str(req.requester.email),
                         req.machine.line, req.machine.station, req.machine.serial,
+                        sla_due_at,
                         now, now
                     ),
                 )
@@ -93,6 +98,7 @@ def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
                     "tenant_id": req.tenant_id,
                     "source": req.source,
                     "priority": req.priority,
+                    "sla_due_at": sla_due_at.isoformat(),
                     "requester": {"name": req.requester.name, "email": str(req.requester.email)},
                     "machine": {"line": req.machine.line, "station": req.machine.station, "serial": req.machine.serial},
                 },
