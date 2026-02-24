@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   createApiClient,
+  type AdminAuditLog,
   type AdminUser,
   type IntakeRequest,
   type Ticket,
@@ -234,6 +235,11 @@ function App() {
     queryFn: () => api.listAdminUsers(tenantId),
     enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
   });
+  const adminAuditLogs = useQuery({
+    queryKey: ["admin-audit-logs", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAdminAuditLogs(tenantId, 100),
+    enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
+  });
 
   const emailHistory = useMemo(() => {
     const fromApi = (tenantEmailHistory.data ?? []).map((item) => item.email.toLowerCase());
@@ -345,6 +351,7 @@ function App() {
     onSuccess: () => {
       setAdminError("");
       queryClient.invalidateQueries({ queryKey: ["tenant-route"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -360,6 +367,7 @@ function App() {
     onSuccess: () => {
       setAdminError("");
       queryClient.invalidateQueries({ queryKey: ["tenant-sla-policy"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -382,6 +390,7 @@ function App() {
       setNewUserRole("operator");
       setNewUserActive(true);
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -392,6 +401,7 @@ function App() {
     onSuccess: () => {
       setAdminError("");
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -401,6 +411,7 @@ function App() {
     onSuccess: (_, args) => {
       setAdminError("");
       setPasswordDraftByUserId((prev) => ({ ...prev, [args.id]: "" }));
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -826,6 +837,36 @@ function App() {
                                 Reset
                               </button>
                             </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="admin-section">
+                <h3>Recent Admin Audit</h3>
+                {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
+                {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
+                {!!adminAuditLogs.data?.length && (
+                  <table className="admin-users-table">
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Actor</th>
+                        <th>Action</th>
+                        <th>Target</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminAuditLogs.data.map((row: AdminAuditLog) => (
+                        <tr key={row.id}>
+                          <td>{formatDate(row.created_at)}</td>
+                          <td>{row.actor_email}</td>
+                          <td>{row.action}</td>
+                          <td>
+                            {row.target_type}:{row.target_id}
                           </td>
                         </tr>
                       ))}

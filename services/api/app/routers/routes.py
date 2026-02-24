@@ -1,11 +1,13 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.auth import require_api_key
+from app.core.auth import get_current_user, require_api_key
+from app.core.identity import resolve_actor
 from app.core.rbac import require_admin_role, require_viewer_role
+from app.db.audit import log_admin_action
 from app.db.session import get_conn
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -97,10 +99,13 @@ def update_tenant_route(
     tenant_id: str,
     payload: TenantRouteUpdate,
     _: None = Depends(require_admin_role),
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
 ):
     to_csv = _list_to_csv([str(item) for item in payload.to_emails])
     if not to_csv:
         raise HTTPException(status_code=422, detail="to_emails must contain at least one email")
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
 
     with get_conn() as conn:
         conn.autocommit = False
@@ -118,6 +123,16 @@ def update_tenant_route(
                     (tenant_id, to_csv),
                 )
                 row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=tenant_id,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="TENANT_ROUTE_UPDATED",
+                    target_type="tenant_route",
+                    target_id=tenant_id,
+                    details={"to_emails": _csv_to_list(row[2])},
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -205,7 +220,10 @@ def update_tenant_sla_policy(
     tenant_id: str,
     payload: TenantSlaPolicyUpdate,
     _: None = Depends(require_admin_role),
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
 ):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
         try:
@@ -231,6 +249,21 @@ def update_tenant_sla_policy(
                     ),
                 )
                 row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=tenant_id,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="TENANT_SLA_POLICY_UPDATED",
+                    target_type="tenant_sla_policy",
+                    target_id=tenant_id,
+                    details={
+                        "p1_minutes": row[1],
+                        "p2_minutes": row[2],
+                        "p3_minutes": row[3],
+                        "p4_minutes": row[4],
+                    },
+                )
             conn.commit()
         except Exception:
             conn.rollback()

@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "postgresql://techops:techops@postgres_app:5432/techops")
 
+from app.core.config import get_settings
 from app.main import app
 
 
@@ -68,3 +69,31 @@ def test_get_and_patch_tenant_sla_policy():
     payload = patch.json()
     assert payload["p1_minutes"] == 45
     assert payload["p4_minutes"] == 720
+
+
+def test_admin_audit_logs_include_route_and_sla_updates(monkeypatch):
+    monkeypatch.setenv("ENFORCE_RBAC", "true")
+    monkeypatch.setenv("ENFORCE_AUTH", "false")
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    sla_patch = client.patch(
+        "/tenant-sla-policies/demo",
+        json={"p1_minutes": 30, "p2_minutes": 120, "p3_minutes": 240, "p4_minutes": 480},
+        headers={"X-User-Role": "admin"},
+    )
+    assert sla_patch.status_code == 200
+
+    route_patch = client.patch(
+        "/tenant-routes/demo",
+        json={"to_emails": ["ops1@example.com", "ops2@example.com"]},
+        headers={"X-User-Role": "admin"},
+    )
+    assert route_patch.status_code == 200
+
+    audit = client.get("/admin/audit-logs", params={"tenant_id": "demo"}, headers={"X-User-Role": "admin"})
+    assert audit.status_code == 200
+    actions = [item["action"] for item in audit.json()]
+    assert "TENANT_SLA_POLICY_UPDATED" in actions
+    assert "TENANT_ROUTE_UPDATED" in actions
+    get_settings.cache_clear()

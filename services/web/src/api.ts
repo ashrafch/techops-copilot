@@ -94,6 +94,18 @@ export interface TenantSlaPolicy {
   updated_at: string;
 }
 
+export interface AdminAuditLog {
+  id: number;
+  tenant_id: string;
+  actor_email: string;
+  actor_role: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface IntakeRequest {
   tenant_id: string;
   source?: string;
@@ -311,6 +323,10 @@ export function createApiClient(options: ApiClientOptions) {
     ) => patchJson<AdminUser>(`/admin/users/${userId}`, payload),
     updateAdminUserPassword: (userId: number, password: string) =>
       patchJson<{ ok: boolean }>(`/admin/users/${userId}/password`, { password }),
+    listAdminAuditLogs: (tenantId = "", limit = 100) =>
+      getJson<AdminAuditLog[]>(
+        `/admin/audit-logs?limit=${limit}${tenantId ? `&tenant_id=${encodeURIComponent(tenantId)}` : ""}`,
+      ),
   };
 }
 

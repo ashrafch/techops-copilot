@@ -48,6 +48,13 @@ def test_admin_user_crud_with_role_header(monkeypatch):
     )
     assert pwd_resp.status_code == 200
     assert pwd_resp.json()["ok"] is True
+
+    audit_resp = client.get("/admin/audit-logs", headers={"X-User-Role": "admin"}, params={"tenant_id": "demo"})
+    assert audit_resp.status_code == 200
+    actions = [row["action"] for row in audit_resp.json()]
+    assert "ADMIN_USER_CREATED" in actions
+    assert "ADMIN_USER_UPDATED" in actions
+    assert "ADMIN_USER_PASSWORD_RESET" in actions
     get_settings.cache_clear()
 
 

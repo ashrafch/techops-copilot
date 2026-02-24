@@ -1,12 +1,14 @@
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.auth import require_api_key
+from app.core.auth import get_current_user, require_api_key
+from app.core.identity import resolve_actor
 from app.core.rbac import require_admin_role
 from app.core.security import generate_salt_hex, hash_password
+from app.db.audit import log_admin_action
 from app.db.session import get_conn
 
 router = APIRouter(
@@ -46,6 +48,18 @@ class AdminPasswordUpdate(BaseModel):
     password: str = Field(min_length=8, max_length=1024)
 
 
+class AdminAuditLogOut(BaseModel):
+    id: int
+    tenant_id: str
+    actor_email: str
+    actor_role: str
+    action: str
+    target_type: str
+    target_id: str
+    details: dict[str, Any]
+    created_at: datetime
+
+
 @router.get("/admin/users", response_model=List[AdminUserOut])
 def list_admin_users(
     tenant_id: str = Query("", min_length=0),
@@ -82,10 +96,57 @@ def list_admin_users(
     ]
 
 
+@router.get("/admin/audit-logs", response_model=List[AdminAuditLogOut])
+def list_admin_audit_logs(
+    tenant_id: str = Query("", min_length=0),
+    limit: int = Query(100, ge=1, le=500),
+):
+    where = ""
+    params: tuple[object, ...]
+    if tenant_id.strip():
+        where = "WHERE tenant_id = %s"
+        params = (tenant_id.strip(), limit)
+    else:
+        params = (limit,)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, tenant_id, actor_email, actor_role, action, target_type, target_id, details, created_at
+            FROM admin_audit_logs
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+
+    return [
+        AdminAuditLogOut(
+            id=row[0],
+            tenant_id=row[1],
+            actor_email=row[2],
+            actor_role=row[3],
+            action=row[4],
+            target_type=row[5],
+            target_id=row[6],
+            details=row[7] or {},
+            created_at=row[8],
+        )
+        for row in rows
+    ]
+
+
 @router.post("/admin/users", response_model=AdminUserOut)
-def create_admin_user(payload: AdminUserCreate):
+def create_admin_user(
+    payload: AdminUserCreate,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
     salt = generate_salt_hex()
     pwd_hash = hash_password(payload.password, salt)
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
 
     with get_conn() as conn:
         conn.autocommit = False
@@ -108,6 +169,16 @@ def create_admin_user(payload: AdminUserCreate):
                     ),
                 )
                 row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=str(row[4]),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="ADMIN_USER_CREATED",
+                    target_type="app_user",
+                    target_id=str(row[0]),
+                    details={"email": row[1], "role": row[3], "is_active": row[5]},
+                )
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -127,7 +198,13 @@ def create_admin_user(payload: AdminUserCreate):
 
 
 @router.patch("/admin/users/{user_id}", response_model=AdminUserOut)
-def update_admin_user(user_id: int, payload: AdminUserUpdate):
+def update_admin_user(
+    user_id: int,
+    payload: AdminUserUpdate,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
         try:
@@ -160,6 +237,21 @@ def update_admin_user(user_id: int, payload: AdminUserUpdate):
                     (new_full_name, new_role, new_tenant, new_active, user_id),
                 )
                 row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=str(row[4]),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="ADMIN_USER_UPDATED",
+                    target_type="app_user",
+                    target_id=str(user_id),
+                    details={
+                        "full_name": row[2],
+                        "role": row[3],
+                        "tenant_id": row[4],
+                        "is_active": row[5],
+                    },
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -177,9 +269,15 @@ def update_admin_user(user_id: int, payload: AdminUserUpdate):
 
 
 @router.patch("/admin/users/{user_id}/password")
-def update_admin_user_password(user_id: int, payload: AdminPasswordUpdate):
+def update_admin_user_password(
+    user_id: int,
+    payload: AdminPasswordUpdate,
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
     salt = generate_salt_hex()
     pwd_hash = hash_password(payload.password, salt)
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
 
     with get_conn() as conn:
         conn.autocommit = False
@@ -200,6 +298,19 @@ def update_admin_user_password(user_id: int, payload: AdminPasswordUpdate):
                 if row is None:
                     conn.rollback()
                     raise HTTPException(status_code=404, detail="User not found")
+                cur.execute("SELECT tenant_id FROM app_users WHERE id = %s", (user_id,))
+                tenant_row = cur.fetchone()
+                tenant_id = str(tenant_row[0]) if tenant_row else "unknown"
+                log_admin_action(
+                    conn,
+                    tenant_id=tenant_id,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="ADMIN_USER_PASSWORD_RESET",
+                    target_type="app_user",
+                    target_id=str(user_id),
+                    details={},
+                )
             conn.commit()
         except Exception:
             conn.rollback()
