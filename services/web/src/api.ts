@@ -61,6 +61,20 @@ export interface ApiStatus {
   status: string;
 }
 
+export interface AuthUser {
+  email: string;
+  full_name: string;
+  role: string;
+  tenant_id: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
 export interface IntakeRequest {
   tenant_id: string;
   source?: string;
@@ -104,6 +118,7 @@ interface ApiClientOptions {
   apiKey?: string;
   webhookUrl?: string;
   userRole?: string;
+  accessToken?: string;
 }
 
 class ApiError extends Error {
@@ -119,10 +134,11 @@ function withTrailingSlashRemoved(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function createHeaders(apiKey?: string, userRole?: string): HeadersInit {
+function createHeaders(apiKey?: string, userRole?: string, accessToken?: string): HeadersInit {
   const headers: Record<string, string> = {};
   if (apiKey) headers["X-API-Key"] = apiKey;
   if (userRole) headers["X-User-Role"] = userRole;
+  if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
   return headers;
 }
 
@@ -138,7 +154,7 @@ async function parseError(response: Response): Promise<never> {
 export function createApiClient(options: ApiClientOptions) {
   const baseUrl = withTrailingSlashRemoved(options.baseUrl);
   const webhookUrl = options.webhookUrl ? withTrailingSlashRemoved(options.webhookUrl) : "";
-  const headers = createHeaders(options.apiKey, options.userRole);
+  const headers = createHeaders(options.apiKey, options.userRole, options.accessToken);
 
   async function getJson<T>(path: string): Promise<T> {
     const response = await fetch(`${baseUrl}${path}`, { headers });
@@ -183,6 +199,9 @@ export function createApiClient(options: ApiClientOptions) {
   return {
     health: () => getJson<ApiStatus>("/health"),
     ready: () => getJson<ApiStatus>("/ready"),
+    login: (email: string, password: string) =>
+      postJson<LoginResponse>("/auth/login", { email, password }),
+    me: () => getJson<AuthUser>("/auth/me"),
     listTickets: (
       tenantId: string,
       status: string,

@@ -1,5 +1,8 @@
 param(
-  [string]$BaseUrl = "http://localhost:8001"
+  [string]$BaseUrl = "http://localhost:8001",
+  [string]$UserRole = "operator",
+  [string]$AuthEmail = "operator@example.com",
+  [string]$AuthPassword = "ChangeMe123!"
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +53,24 @@ Write-Output "Checking readiness..."
 $ready = Invoke-RestMethod -Method Get -Uri "$BaseUrl/ready"
 Assert-Equal -Actual $ready.status -Expected "ready" -Message "Readiness status mismatch"
 
+$headers = @{ "X-User-Role" = $UserRole }
+
+function Try-LoginAuth {
+  param([string]$Url, [hashtable]$TargetHeaders)
+  try {
+    $loginBody = @{ email = $AuthEmail; password = $AuthPassword } | ConvertTo-Json
+    $loginResp = Invoke-RestMethod -Method Post -Uri "$Url/auth/login" -ContentType "application/json" -Body $loginBody
+    if ($loginResp.access_token) {
+      $TargetHeaders["Authorization"] = "Bearer $($loginResp.access_token)"
+      Write-Output "AUTH_LOGIN_OK"
+      return $true
+    }
+  } catch {
+    return $false
+  }
+  return $false
+}
+
 $payload = @{
   tenant_id = "demo"
   source = "smoke-script"
@@ -68,7 +89,17 @@ $payload = @{
 } | ConvertTo-Json -Depth 10
 
 Write-Output "Creating ticket..."
-$intake = Invoke-RestMethod -Method Post -Uri "$BaseUrl/intake" -ContentType "application/json" -Body $payload
+try {
+  $intake = Invoke-RestMethod -Method Post -Uri "$BaseUrl/intake" -ContentType "application/json" -Body $payload -Headers $headers
+} catch {
+  if ($_.Exception.Message -match "401" -or $_.Exception.Message -match "Unauthorized") {
+    $ok = Try-LoginAuth -Url $BaseUrl -TargetHeaders $headers
+    if (-not $ok) { throw }
+    $intake = Invoke-RestMethod -Method Post -Uri "$BaseUrl/intake" -ContentType "application/json" -Body $payload -Headers $headers
+  } else {
+    throw
+  }
+}
 Assert-Equal -Actual $intake.status -Expected "OPEN" -Message "Intake status mismatch"
 $ticketId = $intake.ticket_id
 
@@ -77,21 +108,21 @@ if ([string]::IsNullOrWhiteSpace($ticketId)) {
 }
 
 Write-Output "Fetching ticket..."
-$ticket = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId"
+$ticket = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId" -Headers $headers
 Assert-Equal -Actual $ticket.status -Expected "OPEN" -Message "Ticket status before close mismatch"
 
 Write-Output "Checking events before close..."
-$eventsBefore = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events"
+$eventsBefore = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events" -Headers $headers
 if ($eventsBefore.Count -lt 1) {
   throw "Expected at least one event before close."
 }
 
 Write-Output "Closing ticket..."
-$closed = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tickets/$ticketId/close"
+$closed = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tickets/$ticketId/close" -Headers $headers
 Assert-Equal -Actual $closed.status -Expected "CLOSED" -Message "Close status mismatch"
 
 Write-Output "Checking events after close..."
-$eventsAfter = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events"
+$eventsAfter = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events" -Headers $headers
 if ($eventsAfter.Count -lt ($eventsBefore.Count + 1)) {
   throw "Expected one additional event after close."
 }
@@ -99,10 +130,10 @@ if ($eventsAfter.Count -lt ($eventsBefore.Count + 1)) {
 $closedAfterFirst = @($eventsAfter | Where-Object { $_.event_type -eq "CLOSED" }).Count
 
 Write-Output "Closing ticket again (idempotency check)..."
-$closedAgain = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tickets/$ticketId/close"
+$closedAgain = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tickets/$ticketId/close" -Headers $headers
 Assert-Equal -Actual $closedAgain.status -Expected "CLOSED" -Message "Second close status mismatch"
 
-$eventsAfterSecondClose = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events"
+$eventsAfterSecondClose = Invoke-RestMethod -Method Get -Uri "$BaseUrl/tickets/$ticketId/events" -Headers $headers
 $closedAfterSecond = @($eventsAfterSecondClose | Where-Object { $_.event_type -eq "CLOSED" }).Count
 if ($closedAfterSecond -ne $closedAfterFirst) {
   throw "Idempotency check failed: duplicate CLOSED event detected."

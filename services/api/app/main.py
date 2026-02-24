@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.rate_limit import is_rate_limited
 from app.db.session import DatabaseConnectionError, DatabaseNotConfiguredError
+from app.routers.auth_router import router as auth_router
 from app.routers.events import router as events_router
 from app.routers.health import router as health_router
 from app.routers.intake import router as intake_router
@@ -98,3 +99,4 @@ app.include_router(tickets_router)
 app.include_router(events_router)
 app.include_router(routes_router)
 app.include_router(health_router)
+app.include_router(auth_router)

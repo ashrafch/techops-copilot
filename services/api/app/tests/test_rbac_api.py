@@ -96,3 +96,40 @@ def test_rbac_only_admin_can_patch_tenant_route(monkeypatch):
     )
     assert sla_admin.status_code == 200
     get_settings.cache_clear()
+
+
+def test_rbac_with_auth_token_role(monkeypatch):
+    monkeypatch.setenv("ENFORCE_AUTH", "true")
+    monkeypatch.setenv("ENFORCE_RBAC", "true")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test_secret_key")
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    op_login = client.post(
+        "/auth/login",
+        json={"email": "operator@example.com", "password": "ChangeMe123!"},
+    )
+    assert op_login.status_code == 200
+    op_token = op_login.json()["access_token"]
+
+    forbidden = client.patch(
+        "/tenant-routes/demo",
+        json={"to_emails": ["ops@example.com"]},
+        headers={"Authorization": f"Bearer {op_token}"},
+    )
+    assert forbidden.status_code == 403
+
+    admin_login = client.post(
+        "/auth/login",
+        json={"email": "admin@example.com", "password": "ChangeMe123!"},
+    )
+    assert admin_login.status_code == 200
+    admin_token = admin_login.json()["access_token"]
+
+    allowed = client.patch(
+        "/tenant-routes/demo",
+        json={"to_emails": ["ops@example.com"]},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert allowed.status_code == 200
+    get_settings.cache_clear()

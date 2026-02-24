@@ -216,6 +216,24 @@ Le operazioni di scrittura (`/intake`, `/events`, `/tickets/*/assign`, `/tickets
 
 `X-User-Role: admin` oppure `X-User-Role: operator`
 
+## Auth utente (login reale, opzionale)
+
+Se abiliti:
+`ENFORCE_AUTH=true`
+
+l'API richiede `Authorization: Bearer <token>` sugli endpoint protetti da RBAC.
+
+Endpoint:
+- `POST /auth/login` con body `{"email":"...","password":"..."}`
+- `GET /auth/me`
+
+Seed utenti demo (password iniziale: `ChangeMe123!`):
+- `admin@example.com`
+- `operator@example.com`
+- `viewer@example.com`
+
+Con auth attiva, il ruolo viene letto dal token (non dal solo header `X-User-Role`).
+
 ## Rate limiting (opzionale)
 
 `RATE_LIMIT_RPM` limita richieste/minuto per IP+path sugli endpoint business.

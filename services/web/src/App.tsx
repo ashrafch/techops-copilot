@@ -6,10 +6,13 @@ import "./App.css";
 const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
 const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY ?? "";
 const DEFAULT_USER_ROLE = import.meta.env.VITE_USER_ROLE ?? "operator";
+const DEFAULT_ENFORCE_AUTH = (import.meta.env.VITE_ENFORCE_AUTH ?? "false") === "true";
 const DEFAULT_WEBHOOK_URL =
   import.meta.env.VITE_WEBHOOK_URL ?? "http://localhost:5678/webhook/ticket-intake";
 const DEFAULT_INTAKE_MODE = import.meta.env.VITE_INTAKE_MODE ?? "webhook";
 const EMAIL_HISTORY_KEY = "techops.email_history";
+const AUTH_TOKEN_KEY = "techops.auth.token";
+const AUTH_USER_KEY = "techops.auth.user";
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -37,6 +40,30 @@ function persistEmailHistory(emails: string[]) {
   window.localStorage.setItem(EMAIL_HISTORY_KEY, JSON.stringify(emails));
 }
 
+function loadAuthToken(): string {
+  return window.localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
+}
+
+function loadAuthUser(): { email: string; full_name: string; role: string; tenant_id: string } | null {
+  try {
+    const raw = window.localStorage.getItem(AUTH_USER_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as { email: string; full_name: string; role: string; tenant_id: string };
+  } catch {
+    return null;
+  }
+}
+
+function persistAuth(token: string, user: { email: string; full_name: string; role: string; tenant_id: string }) {
+  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+  window.localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+}
+
+function clearAuth() {
+  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+  window.localStorage.removeItem(AUTH_USER_KEY);
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return `${error.message} (status ${error.status})`;
   if (error instanceof Error) return error.message;
@@ -47,9 +74,15 @@ function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [userRole, setUserRole] = useState(DEFAULT_USER_ROLE);
+  const [enforceAuth] = useState(DEFAULT_ENFORCE_AUTH);
+  const [accessToken, setAccessToken] = useState(() => loadAuthToken());
+  const [authUser, setAuthUser] = useState(() => loadAuthUser());
+  const [loginEmail, setLoginEmail] = useState("operator@example.com");
+  const [loginPassword, setLoginPassword] = useState("ChangeMe123!");
+  const [loginError, setLoginError] = useState("");
   const [webhookUrl, setWebhookUrl] = useState(DEFAULT_WEBHOOK_URL);
   const [intakeMode, setIntakeMode] = useState(DEFAULT_INTAKE_MODE);
-  const [tenantId, setTenantId] = useState("demo");
+  const [tenantId, setTenantId] = useState(() => loadAuthUser()?.tenant_id ?? "demo");
   const [statusFilter, setStatusFilter] = useState("OPEN");
   const [queueMode, setQueueMode] = useState("ALL");
   const [myAssigneeEmail, setMyAssigneeEmail] = useState("");
@@ -78,9 +111,29 @@ function App() {
 
   const queryClient = useQueryClient();
   const api = useMemo(
-    () => createApiClient({ baseUrl, apiKey, webhookUrl, userRole }),
-    [baseUrl, apiKey, webhookUrl, userRole],
+    () => createApiClient({ baseUrl, apiKey, webhookUrl, userRole, accessToken }),
+    [baseUrl, apiKey, webhookUrl, userRole, accessToken],
   );
+
+  const loginMutation = useMutation({
+    mutationFn: (args: { email: string; password: string }) => api.login(args.email, args.password),
+    onSuccess: (result) => {
+      setLoginError("");
+      setAccessToken(result.access_token);
+      setAuthUser(result.user);
+      setUserRole(result.user.role);
+      setTenantId(result.user.tenant_id || "demo");
+      persistAuth(result.access_token, result.user);
+    },
+    onError: (error) => setLoginError(getErrorMessage(error)),
+  });
+
+  const meQuery = useQuery({
+    queryKey: ["me", baseUrl, accessToken],
+    queryFn: () => api.me(),
+    enabled: Boolean(accessToken),
+    retry: false,
+  });
 
   const health = useQuery({
     queryKey: ["health", baseUrl],
@@ -93,7 +146,17 @@ function App() {
   });
 
   const tickets = useQuery({
-    queryKey: ["tickets", baseUrl, apiKey, tenantId, statusFilter, queueMode, myAssigneeEmail],
+    queryKey: [
+      "tickets",
+      baseUrl,
+      apiKey,
+      accessToken,
+      userRole,
+      tenantId,
+      statusFilter,
+      queueMode,
+      myAssigneeEmail,
+    ],
     queryFn: () =>
       api.listTickets(tenantId, statusFilter, {
         assigneeEmail: queueMode === "MY" ? myAssigneeEmail : "",
@@ -103,33 +166,37 @@ function App() {
             ? (queueMode as "AT_RISK" | "BREACHED")
             : "ALL",
       }),
+    enabled: !enforceAuth || Boolean(accessToken),
   });
 
   const queueSummary = useQuery({
-    queryKey: ["queue-summary", baseUrl, apiKey, tenantId, myAssigneeEmail],
+    queryKey: ["queue-summary", baseUrl, apiKey, accessToken, userRole, tenantId, myAssigneeEmail],
     queryFn: () => api.getQueueSummary(tenantId, myAssigneeEmail),
+    enabled: !enforceAuth || Boolean(accessToken),
   });
 
   const selectedTicket = useQuery({
-    queryKey: ["ticket", baseUrl, apiKey, selectedTicketId],
+    queryKey: ["ticket", baseUrl, apiKey, accessToken, userRole, selectedTicketId],
     queryFn: () => api.getTicket(selectedTicketId),
-    enabled: Boolean(selectedTicketId),
+    enabled: Boolean(selectedTicketId) && (!enforceAuth || Boolean(accessToken)),
   });
 
   const selectedEvents = useQuery({
-    queryKey: ["events", baseUrl, apiKey, selectedTicketId],
+    queryKey: ["events", baseUrl, apiKey, accessToken, userRole, selectedTicketId],
     queryFn: () => api.getTicketEvents(selectedTicketId),
-    enabled: Boolean(selectedTicketId),
+    enabled: Boolean(selectedTicketId) && (!enforceAuth || Boolean(accessToken)),
   });
 
   const tenantRoute = useQuery({
-    queryKey: ["tenant-route", baseUrl, apiKey, tenantId],
+    queryKey: ["tenant-route", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.getTenantRoute(tenantId),
+    enabled: !enforceAuth || Boolean(accessToken),
   });
 
   const tenantEmailHistory = useQuery({
-    queryKey: ["tenant-email-history", baseUrl, apiKey, tenantId],
+    queryKey: ["tenant-email-history", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.getTenantEmailHistory(tenantId, 100),
+    enabled: !enforceAuth || Boolean(accessToken),
   });
 
   const emailHistory = useMemo(() => {
@@ -279,6 +346,14 @@ function App() {
   });
   const openCount = rows.filter((t) => t.status === "OPEN").length;
   const closedCount = rows.filter((t) => t.status === "CLOSED").length;
+  const isAuthMissing = enforceAuth && (!accessToken || meQuery.isError);
+  const activeUser = meQuery.data ?? authUser;
+
+  function handleLogout() {
+    clearAuth();
+    setAccessToken("");
+    setAuthUser(null);
+  }
 
   return (
     <div className="page-shell">
@@ -288,6 +363,16 @@ function App() {
           <p className="subtitle">Ticketing operations with automation visibility</p>
         </div>
         <div className="status-grid">
+          {activeUser && (
+            <div className="status-chip">
+              User: {activeUser.email} ({activeUser.role})
+            </div>
+          )}
+          {enforceAuth && accessToken && (
+            <button className="secondary-button" onClick={handleLogout}>
+              Logout
+            </button>
+          )}
           <div className={`status-chip ${health.data?.status === "ok" ? "ok" : "fail"}`}>
             API Health: {health.isLoading ? "..." : health.data?.status ?? "error"}
           </div>
@@ -297,6 +382,37 @@ function App() {
         </div>
       </header>
 
+      {isAuthMissing ? (
+        <section className="card login-card">
+          <h2>Sign In</h2>
+          <p className="subtitle">Demo users: admin/operator/viewer @ example.com</p>
+          <div className="create-form">
+            <label className="full-row">
+              Email
+              <input value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+            </label>
+            <label className="full-row">
+              Password
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+              />
+            </label>
+            <div className="create-actions full-row">
+              <button
+                type="button"
+                onClick={() => loginMutation.mutate({ email: loginEmail.trim(), password: loginPassword })}
+                disabled={loginMutation.isPending}
+              >
+                {loginMutation.isPending ? "Signing in..." : "Sign In"}
+              </button>
+              {loginError && <p className="error">{loginError}</p>}
+            </div>
+          </div>
+        </section>
+      ) : (
+      <>
       <section className="control-panel">
         <label>
           API Base URL
@@ -338,7 +454,11 @@ function App() {
         </label>
         <label>
           User Role
-          <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+          <select
+            value={userRole}
+            onChange={(e) => setUserRole(e.target.value)}
+            disabled={enforceAuth}
+          >
             <option value="admin">admin</option>
             <option value="operator">operator</option>
             <option value="viewer">viewer</option>
@@ -663,6 +783,8 @@ function App() {
           )}
         </section>
       </main>
+      </>
+      )}
     </div>
   );
 }
