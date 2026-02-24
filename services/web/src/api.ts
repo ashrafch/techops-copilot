@@ -119,6 +119,15 @@ export interface AdminAuditLog {
   created_at: string;
 }
 
+export interface TenantAutomationPolicy {
+  tenant_id: string;
+  correlation_window_minutes: number;
+  at_risk_lead_minutes: number;
+  auto_assign_name: string;
+  auto_assign_email?: string | null;
+  updated_at: string;
+}
+
 export interface IntakeRequest {
   tenant_id: string;
   source?: string;
@@ -155,6 +164,14 @@ export interface WebhookIntakeResponse {
   status: TicketStatus;
   tenant_id: string;
   notified_to?: string[];
+}
+
+export interface SlaMonitorResponse {
+  tenant_id: string;
+  scanned: number;
+  at_risk_alerted: number;
+  breached_alerted: number;
+  ticket_ids: string[];
 }
 
 interface ApiClientOptions {
@@ -330,6 +347,19 @@ export function createApiClient(options: ApiClientOptions) {
       payload: { p1_minutes: number; p2_minutes: number; p3_minutes: number; p4_minutes: number },
     ) =>
       patchJson<TenantSlaPolicy>(`/tenant-sla-policies/${encodeURIComponent(tenantId)}`, payload),
+    getTenantAutomationPolicy: (tenantId: string) =>
+      getJson<TenantAutomationPolicy>(`/tenant-automation-policies/${encodeURIComponent(tenantId)}`),
+    updateTenantAutomationPolicy: (
+      tenantId: string,
+      payload: {
+        correlation_window_minutes: number;
+        at_risk_lead_minutes: number;
+        auto_assign_name: string;
+        auto_assign_email?: string | null;
+      },
+    ) => patchJson<TenantAutomationPolicy>(`/tenant-automation-policies/${encodeURIComponent(tenantId)}`, payload),
+    runSlaMonitor: (tenantId: string, limit = 200) =>
+      postJson<SlaMonitorResponse>("/automation/sla-monitor", { tenant_id: tenantId, limit }),
     listAdminUsers: (tenantId = "") =>
       getJson<AdminUser[]>(
         `/admin/users${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,

@@ -3,6 +3,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.db.session import get_conn
 from app.main import app
 
 
@@ -102,3 +103,107 @@ def test_external_trigger_endpoint_works_with_rbac_enabled_without_user_role(mon
     assert resp.status_code == 200
     assert resp.json()["decision"] in {"CREATED", "CORRELATED"}
     get_settings.cache_clear()
+
+
+def test_external_trigger_uses_tenant_automation_auto_assign():
+    client = TestClient(app)
+    policy = client.patch(
+        "/tenant-automation-policies/demo",
+        json={
+            "correlation_window_minutes": 1440,
+            "at_risk_lead_minutes": 60,
+            "auto_assign_name": "Automation Dispatcher",
+            "auto_assign_email": "dispatch@example.com",
+        },
+    )
+    assert policy.status_code == 200
+
+    resp = client.post(
+        "/automation/external-intake",
+        json=_trigger_payload(
+            event_id=f"evt-{uuid4().hex[:8]}",
+            event_type="CONVEYOR_JAM",
+            severity="high",
+            asset_id=f"CONV-{uuid4().hex[:6]}",
+        ),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ticket = client.get(f"/tickets/{body['ticket_id']}")
+    assert ticket.status_code == 200
+    assert ticket.json()["assignee_name"] == "Automation Dispatcher"
+    assert ticket.json()["assignee_email"] == "dispatch@example.com"
+
+
+def test_external_trigger_respects_correlation_window():
+    client = TestClient(app)
+    update = client.patch(
+        "/tenant-automation-policies/demo",
+        json={
+            "correlation_window_minutes": 1,
+            "at_risk_lead_minutes": 1,
+            "auto_assign_name": "Automation Dispatcher",
+            "auto_assign_email": "dispatch@example.com",
+        },
+    )
+    assert update.status_code == 200
+
+    first = client.post(
+        "/automation/external-intake",
+        json=_trigger_payload(
+            event_id=f"evt-{uuid4().hex[:8]}",
+            event_type="ROBOT_STALL",
+            severity="critical",
+            asset_id="RB-WINDOW-01",
+        ),
+    )
+    assert first.status_code == 200
+    first_ticket_id = first.json()["ticket_id"]
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tickets SET created_at = NOW() - INTERVAL '3 minutes' WHERE ticket_id = %s",
+            (first_ticket_id,),
+        )
+        conn.commit()
+
+    second = client.post(
+        "/automation/external-intake",
+        json=_trigger_payload(
+            event_id=f"evt-{uuid4().hex[:8]}",
+            event_type="ROBOT_STALL",
+            severity="critical",
+            asset_id="RB-WINDOW-01",
+        ),
+    )
+    assert second.status_code == 200
+    assert second.json()["decision"] == "CREATED"
+    assert second.json()["ticket_id"] != first_ticket_id
+
+
+def test_sla_monitor_creates_breach_alert_once():
+    client = TestClient(app)
+    create = client.post(
+        "/automation/external-intake",
+        json=_trigger_payload(
+            event_id=f"evt-{uuid4().hex[:8]}",
+            event_type="ROBOT_STALL",
+            severity="critical",
+            asset_id=f"RB-SLA-{uuid4().hex[:4]}",
+        ),
+    )
+    assert create.status_code == 200
+    ticket_id = create.json()["ticket_id"]
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE tickets SET sla_due_at = NOW() - INTERVAL '5 minutes' WHERE ticket_id = %s", (ticket_id,))
+        conn.commit()
+
+    first = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 200})
+    assert first.status_code == 200
+    assert first.json()["breached_alerted"] >= 1
+    assert ticket_id in first.json()["ticket_ids"]
+
+    second = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 200})
+    assert second.status_code == 200
+    assert second.json()["breached_alerted"] == 0

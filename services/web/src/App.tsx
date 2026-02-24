@@ -108,13 +108,18 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [activeView, setActiveView] = useState<"operations" | "kpi" | "admin">("operations");
-  const [adminSection, setAdminSection] = useState<"users" | "routing" | "sla" | "audit" | "technical">("users");
+  const [adminSection, setAdminSection] = useState<"users" | "routing" | "sla" | "automation" | "audit" | "technical">("users");
   const [adminError, setAdminError] = useState("");
   const [routeEmailsDraft, setRouteEmailsDraft] = useState("");
   const [slaP1, setSlaP1] = useState("");
   const [slaP2, setSlaP2] = useState("");
   const [slaP3, setSlaP3] = useState("");
   const [slaP4, setSlaP4] = useState("");
+  const [automationWindow, setAutomationWindow] = useState("");
+  const [automationAtRiskLead, setAutomationAtRiskLead] = useState("");
+  const [automationAssignName, setAutomationAssignName] = useState("");
+  const [automationAssignEmail, setAutomationAssignEmail] = useState("");
+  const [slaMonitorResult, setSlaMonitorResult] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState<"admin" | "operator" | "viewer">("operator");
@@ -234,6 +239,11 @@ function App() {
   const tenantSlaPolicy = useQuery({
     queryKey: ["tenant-sla-policy", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.getTenantSlaPolicy(tenantId),
+    enabled: isAdminUser && (!enforceAuth || Boolean(accessToken)),
+  });
+  const tenantAutomationPolicy = useQuery({
+    queryKey: ["tenant-automation-policy", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getTenantAutomationPolicy(tenantId),
     enabled: isAdminUser && (!enforceAuth || Boolean(accessToken)),
   });
 
@@ -386,6 +396,38 @@ function App() {
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
+  const updateAutomationPolicyMutation = useMutation({
+    mutationFn: () =>
+      api.updateTenantAutomationPolicy(tenantId, {
+        correlation_window_minutes: Number(
+          automationWindow || tenantAutomationPolicy.data?.correlation_window_minutes || 1440,
+        ),
+        at_risk_lead_minutes: Number(
+          automationAtRiskLead || tenantAutomationPolicy.data?.at_risk_lead_minutes || 60,
+        ),
+        auto_assign_name: (automationAssignName || tenantAutomationPolicy.data?.auto_assign_name || "").trim(),
+        auto_assign_email: (automationAssignEmail || tenantAutomationPolicy.data?.auto_assign_email || "").trim() || null,
+      }),
+    onSuccess: () => {
+      setAdminError("");
+      queryClient.invalidateQueries({ queryKey: ["tenant-automation-policy"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const runSlaMonitorMutation = useMutation({
+    mutationFn: () => api.runSlaMonitor(tenantId, 500),
+    onSuccess: (result) => {
+      setAdminError("");
+      setSlaMonitorResult(
+        `Scanned ${result.scanned} | AT_RISK ${result.at_risk_alerted} | BREACHED ${result.breached_alerted}`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
 
   const createAdminUserMutation = useMutation({
     mutationFn: () =>
@@ -431,7 +473,7 @@ function App() {
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
 
-  function openAdminSection(section: "users" | "routing" | "sla" | "audit" | "technical") {
+  function openAdminSection(section: "users" | "routing" | "sla" | "automation" | "audit" | "technical") {
     setActiveView("admin");
     setAdminSection(section);
     setRouteEmailsDraft((tenantRoute.data?.to_emails ?? []).join(", "));
@@ -439,6 +481,11 @@ function App() {
     setSlaP2(String(tenantSlaPolicy.data?.p2_minutes ?? 240));
     setSlaP3(String(tenantSlaPolicy.data?.p3_minutes ?? 480));
     setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
+    setAutomationWindow(String(tenantAutomationPolicy.data?.correlation_window_minutes ?? 1440));
+    setAutomationAtRiskLead(String(tenantAutomationPolicy.data?.at_risk_lead_minutes ?? 60));
+    setAutomationAssignName(tenantAutomationPolicy.data?.auto_assign_name ?? "");
+    setAutomationAssignEmail(tenantAutomationPolicy.data?.auto_assign_email ?? "");
+    setSlaMonitorResult("");
     setAdminError("");
   }
 
@@ -1048,6 +1095,7 @@ function App() {
               <button className={adminSection === "users" ? "view-button active" : "view-button"} onClick={() => setAdminSection("users")}>Users</button>
               <button className={adminSection === "routing" ? "view-button active" : "view-button"} onClick={() => setAdminSection("routing")}>Routing</button>
               <button className={adminSection === "sla" ? "view-button active" : "view-button"} onClick={() => setAdminSection("sla")}>SLA</button>
+              <button className={adminSection === "automation" ? "view-button active" : "view-button"} onClick={() => setAdminSection("automation")}>Automation</button>
               <button className={adminSection === "audit" ? "view-button active" : "view-button"} onClick={() => setAdminSection("audit")}>Audit</button>
               <button className={adminSection === "technical" ? "view-button active" : "view-button"} onClick={() => setAdminSection("technical")}>Technical</button>
             </div>
@@ -1112,6 +1160,63 @@ function App() {
                   <button onClick={() => updateSlaMutation.mutate()} disabled={updateSlaMutation.isPending}>
                     {updateSlaMutation.isPending ? "Saving..." : "Save SLA"}
                   </button>
+                </div>
+              </div>
+            )}
+
+            {adminSection === "automation" && (
+              <div className="admin-section">
+                <h3>Tenant Automation Policy</h3>
+                <p className="subtitle">Set correlation window and default assignee for external AI triggers.</p>
+                <div className="create-form">
+                  <label>
+                    Correlation Window (minutes)
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={automationWindow}
+                      onChange={(e) => setAutomationWindow(e.target.value)}
+                      placeholder="1440"
+                    />
+                  </label>
+                  <label>
+                    AT_RISK Lead Time (minutes)
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={automationAtRiskLead}
+                      onChange={(e) => setAutomationAtRiskLead(e.target.value)}
+                      placeholder="60"
+                    />
+                  </label>
+                  <label>
+                    Auto-Assign Name
+                    <input
+                      value={automationAssignName}
+                      onChange={(e) => setAutomationAssignName(e.target.value)}
+                      placeholder="Automation Dispatcher"
+                    />
+                  </label>
+                  <label>
+                    Auto-Assign Email
+                    <input
+                      type="email"
+                      value={automationAssignEmail}
+                      onChange={(e) => setAutomationAssignEmail(e.target.value)}
+                      placeholder="dispatch@company.com"
+                    />
+                  </label>
+                  <div className="create-actions">
+                    <button onClick={() => updateAutomationPolicyMutation.mutate()} disabled={updateAutomationPolicyMutation.isPending}>
+                      {updateAutomationPolicyMutation.isPending ? "Saving..." : "Save Automation Policy"}
+                    </button>
+                    <button className="secondary-button" onClick={() => runSlaMonitorMutation.mutate()} disabled={runSlaMonitorMutation.isPending}>
+                      {runSlaMonitorMutation.isPending ? "Running..." : "Run SLA Monitor"}
+                    </button>
+                  </div>
+                  {slaMonitorResult && <p className="subtitle">{slaMonitorResult}</p>}
                 </div>
               </div>
             )}

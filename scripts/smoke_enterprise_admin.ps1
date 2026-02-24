@@ -74,6 +74,16 @@ $slaBody = @{
 $slaResp = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tenant-sla-policies/$tenantId" -Headers $headers -ContentType "application/json" -Body $slaBody
 Assert-True -Condition ($slaResp.p1_minutes -eq 30) -Message "SLA update failed."
 
+Write-Output "Update tenant automation policy..."
+$automationBody = @{
+  correlation_window_minutes = 240
+  at_risk_lead_minutes = 60
+  auto_assign_name = "Automation Dispatcher"
+  auto_assign_email = "dispatch@example.com"
+} | ConvertTo-Json
+$automationResp = Invoke-RestMethod -Method Patch -Uri "$BaseUrl/tenant-automation-policies/$tenantId" -Headers $headers -ContentType "application/json" -Body $automationBody
+Assert-True -Condition ($automationResp.correlation_window_minutes -eq 240) -Message "Automation policy update failed."
+
 $suffix = [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $newUserEmail = "ops.$suffix@example.com"
 
