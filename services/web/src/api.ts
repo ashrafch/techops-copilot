@@ -195,6 +195,18 @@ async function parseError(response: Response): Promise<never> {
   }
 }
 
+async function parseJsonOrThrow<T>(response: Response, emptyBodyMessage: string): Promise<T> {
+  const raw = await response.text();
+  if (!raw.trim()) {
+    throw new ApiError(emptyBodyMessage, response.status);
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new ApiError("Invalid JSON response from upstream service", response.status);
+  }
+}
+
 export function createApiClient(options: ApiClientOptions) {
   const baseUrl = withTrailingSlashRemoved(options.baseUrl);
   const webhookUrl = options.webhookUrl ? withTrailingSlashRemoved(options.webhookUrl) : "";
@@ -203,7 +215,7 @@ export function createApiClient(options: ApiClientOptions) {
   async function getJson<T>(path: string): Promise<T> {
     const response = await fetch(`${baseUrl}${path}`, { headers });
     if (!response.ok) await parseError(response);
-    return (await response.json()) as T;
+    return parseJsonOrThrow<T>(response, "Empty response from API");
   }
 
   async function patchJson<T>(path: string, payload?: unknown): Promise<T> {
@@ -214,7 +226,7 @@ export function createApiClient(options: ApiClientOptions) {
     }
     const response = await fetch(`${baseUrl}${path}`, requestInit);
     if (!response.ok) await parseError(response);
-    return (await response.json()) as T;
+    return parseJsonOrThrow<T>(response, "Empty response from API");
   }
 
   async function postJson<T>(path: string, payload: unknown): Promise<T> {
@@ -224,7 +236,7 @@ export function createApiClient(options: ApiClientOptions) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) await parseError(response);
-    return (await response.json()) as T;
+    return parseJsonOrThrow<T>(response, "Empty response from API");
   }
 
   async function postWebhookJson<T>(payload: unknown): Promise<T> {
@@ -237,7 +249,10 @@ export function createApiClient(options: ApiClientOptions) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) await parseError(response);
-    return (await response.json()) as T;
+    return parseJsonOrThrow<T>(
+      response,
+      "Webhook responded with empty body. Check n8n 'Respond to Webhook' node output JSON.",
+    );
   }
 
   return {
