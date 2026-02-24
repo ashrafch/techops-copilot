@@ -189,6 +189,23 @@ Il test avvia `postgres_app`, `minio`, `api` e valida:
 - timeline eventi (`/tickets/{ticket_id}/events`)
 - chiusura ticket (`/tickets/{ticket_id}/close`)
 
+## Smoke test enterprise (admin workflow)
+
+Per validare un flusso enterprise completo (admin operations + governance):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/smoke_enterprise_admin.ps1
+```
+
+Il test copre:
+- login admin (quando auth è attiva)
+- update route tenant
+- update policy SLA tenant
+- creazione utente da control plane admin
+- disattivazione utente
+- lettura audit log amministrativo
+- lettura KPI operativi (`/tickets/metrics`)
+
 ## Test API (suite rapida)
 
 ```powershell
