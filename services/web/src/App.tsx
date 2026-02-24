@@ -107,7 +107,8 @@ function App() {
   const [noteText, setNoteText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [showAdminSettings, setShowAdminSettings] = useState(false);
+  const [activeView, setActiveView] = useState<"operations" | "kpi" | "admin">("operations");
+  const [adminSection, setAdminSection] = useState<"users" | "routing" | "sla" | "audit" | "technical">("users");
   const [adminError, setAdminError] = useState("");
   const [routeEmailsDraft, setRouteEmailsDraft] = useState("");
   const [slaP1, setSlaP1] = useState("");
@@ -159,6 +160,7 @@ function App() {
   });
   const effectiveRole = meQuery.data?.role ?? authUser?.role ?? userRole;
   const isAdminUser = effectiveRole === "admin";
+  const resolvedView = !isAdminUser && activeView === "admin" ? "operations" : activeView;
 
   const health = useQuery({
     queryKey: ["health", baseUrl],
@@ -238,12 +240,12 @@ function App() {
   const adminUsers = useQuery({
     queryKey: ["admin-users", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.listAdminUsers(tenantId),
-    enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
+    enabled: isAdminUser && activeView === "admin" && (!enforceAuth || Boolean(accessToken)),
   });
   const adminAuditLogs = useQuery({
     queryKey: ["admin-audit-logs", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.listAdminAuditLogs(tenantId, 100),
-    enabled: isAdminUser && showAdminSettings && (!enforceAuth || Boolean(accessToken)),
+    enabled: isAdminUser && activeView === "admin" && (!enforceAuth || Boolean(accessToken)),
   });
 
   const emailHistory = useMemo(() => {
@@ -429,16 +431,15 @@ function App() {
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
 
-  function toggleAdminSettings() {
-    if (!showAdminSettings) {
-      setRouteEmailsDraft((tenantRoute.data?.to_emails ?? []).join(", "));
-      setSlaP1(String(tenantSlaPolicy.data?.p1_minutes ?? 60));
-      setSlaP2(String(tenantSlaPolicy.data?.p2_minutes ?? 240));
-      setSlaP3(String(tenantSlaPolicy.data?.p3_minutes ?? 480));
-      setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
-      setAdminError("");
-    }
-    setShowAdminSettings((prev) => !prev);
+  function openAdminSection(section: "users" | "routing" | "sla" | "audit" | "technical") {
+    setActiveView("admin");
+    setAdminSection(section);
+    setRouteEmailsDraft((tenantRoute.data?.to_emails ?? []).join(", "));
+    setSlaP1(String(tenantSlaPolicy.data?.p1_minutes ?? 60));
+    setSlaP2(String(tenantSlaPolicy.data?.p2_minutes ?? 240));
+    setSlaP3(String(tenantSlaPolicy.data?.p3_minutes ?? 480));
+    setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
+    setAdminError("");
   }
 
   function submitCreateTicket(event: React.FormEvent<HTMLFormElement>) {
@@ -561,6 +562,31 @@ function App() {
         </section>
       ) : (
       <>
+      <section className="view-switch">
+        <button
+          className={resolvedView === "operations" ? "view-button active" : "view-button"}
+          onClick={() => setActiveView("operations")}
+        >
+          Operations
+        </button>
+        <button
+          className={resolvedView === "kpi" ? "view-button active" : "view-button"}
+          onClick={() => setActiveView("kpi")}
+        >
+          KPI Dashboard
+        </button>
+        {isAdminUser && (
+          <button
+            className={resolvedView === "admin" ? "view-button active" : "view-button"}
+            onClick={() => openAdminSection(adminSection)}
+          >
+            Admin Workspace
+          </button>
+        )}
+      </section>
+
+      {resolvedView !== "admin" && (
+      <>
       <section className="control-panel">
         <label>
           Tenant
@@ -653,251 +679,19 @@ function App() {
               queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
             }}
           >
-            Refresh Inbox
+            Refresh
           </button>
         </label>
       </section>
 
-      {isAdminUser && (
-        <section className="card admin-panel">
-          <div className="admin-head">
-            <h2>Admin Settings</h2>
-            <button className="secondary-button" onClick={toggleAdminSettings}>
-              {showAdminSettings ? "Hide" : "Show"} Technical Settings
-            </button>
-          </div>
-          {showAdminSettings && (
-            <div className="admin-settings-grid">
-              <div className="control-panel tech-panel">
-                <label>
-                  API Base URL
-                  <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-                </label>
-                <label>
-                  API Key
-                  <input
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Optional unless API auth enabled"
-                  />
-                </label>
-                <label>
-                  Intake Mode
-                  <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
-                    <option value="webhook">webhook (recommended)</option>
-                    <option value="api">api (/intake direct)</option>
-                  </select>
-                </label>
-                <label>
-                  Webhook URL
-                  <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
-                </label>
-                {!enforceAuth && (
-                  <label>
-                    User Role
-                    <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
-                      <option value="admin">admin</option>
-                      <option value="operator">operator</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                  </label>
-                )}
-              </div>
+      <section className="kpi-cards">
+        <article className="card kpi-card"><h3>Open Queue</h3><strong>{queueSummary.data?.open_total ?? "-"}</strong></article>
+        <article className="card kpi-card"><h3>At Risk</h3><strong>{queueSummary.data?.at_risk_total ?? "-"}</strong></article>
+        <article className="card kpi-card"><h3>Breached</h3><strong>{queueSummary.data?.breached_total ?? "-"}</strong></article>
+        <article className="card kpi-card"><h3>Avg Resolve (min)</h3><strong>{ticketMetrics.data?.avg_resolution_minutes ?? "-"}</strong></article>
+      </section>
 
-              <div className="admin-section">
-                <h3>Tenant Notification Routing</h3>
-                <p className="subtitle">Define default email recipients for notifications.</p>
-                <div className="inline-form">
-                  <input
-                    value={routeEmailsDraft}
-                    onChange={(e) => setRouteEmailsDraft(e.target.value)}
-                    placeholder="mail1@company.com, mail2@company.com"
-                  />
-                  <button
-                    onClick={() => updateRouteMutation.mutate(routeEmailsDraft)}
-                    disabled={updateRouteMutation.isPending}
-                  >
-                    {updateRouteMutation.isPending ? "Saving..." : "Save Routing"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="admin-section">
-                <h3>Tenant SLA Policy (minutes)</h3>
-                <div className="inline-form">
-                  <input value={slaP1} onChange={(e) => setSlaP1(e.target.value)} placeholder="P1" />
-                  <input value={slaP2} onChange={(e) => setSlaP2(e.target.value)} placeholder="P2" />
-                  <input value={slaP3} onChange={(e) => setSlaP3(e.target.value)} placeholder="P3" />
-                  <input value={slaP4} onChange={(e) => setSlaP4(e.target.value)} placeholder="P4" />
-                  <button onClick={() => updateSlaMutation.mutate()} disabled={updateSlaMutation.isPending}>
-                    {updateSlaMutation.isPending ? "Saving..." : "Save SLA"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="admin-section">
-                <h3>User Management</h3>
-                <div className="create-form">
-                  <label>
-                    Email
-                    <input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} />
-                  </label>
-                  <label>
-                    Full Name
-                    <input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} />
-                  </label>
-                  <label>
-                    Role
-                    <select
-                      value={newUserRole}
-                      onChange={(e) =>
-                        setNewUserRole(e.target.value as "admin" | "operator" | "viewer")
-                      }
-                    >
-                      <option value="admin">admin</option>
-                      <option value="operator">operator</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                  </label>
-                  <label>
-                    Password
-                    <input
-                      type="password"
-                      value={newUserPassword}
-                      onChange={(e) => setNewUserPassword(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Active
-                    <select
-                      value={newUserActive ? "true" : "false"}
-                      onChange={(e) => setNewUserActive(e.target.value === "true")}
-                    >
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  </label>
-                  <div className="create-actions">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!newUserEmail.trim() || !newUserName.trim() || !newUserPassword.trim()) {
-                          setAdminError("Email, full name and password are required.");
-                          return;
-                        }
-                        createAdminUserMutation.mutate();
-                      }}
-                      disabled={createAdminUserMutation.isPending}
-                    >
-                      {createAdminUserMutation.isPending ? "Creating..." : "Create User"}
-                    </button>
-                  </div>
-                </div>
-
-                {adminUsers.isLoading && <p>Loading users...</p>}
-                {adminUsers.isError && <p className="error">{getErrorMessage(adminUsers.error)}</p>}
-                {!!adminUsers.data?.length && (
-                  <table className="admin-users-table">
-                    <thead>
-                      <tr>
-                        <th>Email</th>
-                        <th>Name</th>
-                        <th>Role</th>
-                        <th>Active</th>
-                        <th>Password Reset</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {adminUsers.data.map((user: AdminUser) => (
-                        <tr key={user.id}>
-                          <td>{user.email}</td>
-                          <td>{user.full_name}</td>
-                          <td>{user.role}</td>
-                          <td>
-                            <button
-                              className="secondary-button"
-                              onClick={() =>
-                                toggleUserActiveMutation.mutate({
-                                  id: user.id,
-                                  isActive: !user.is_active,
-                                })
-                              }
-                              disabled={toggleUserActiveMutation.isPending}
-                            >
-                              {user.is_active ? "Disable" : "Enable"}
-                            </button>
-                          </td>
-                          <td>
-                            <div className="inline-form">
-                              <input
-                                type="password"
-                                value={passwordDraftByUserId[user.id] ?? ""}
-                                placeholder="New password"
-                                onChange={(e) =>
-                                  setPasswordDraftByUserId((prev) => ({
-                                    ...prev,
-                                    [user.id]: e.target.value,
-                                  }))
-                                }
-                              />
-                              <button
-                                onClick={() => {
-                                  const password = (passwordDraftByUserId[user.id] ?? "").trim();
-                                  if (password.length < 8) {
-                                    setAdminError("Password must be at least 8 characters.");
-                                    return;
-                                  }
-                                  updateAdminPasswordMutation.mutate({ id: user.id, password });
-                                }}
-                                disabled={updateAdminPasswordMutation.isPending}
-                              >
-                                Reset
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              <div className="admin-section">
-                <h3>Recent Admin Audit</h3>
-                {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
-                {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
-                {!!adminAuditLogs.data?.length && (
-                  <table className="admin-users-table">
-                    <thead>
-                      <tr>
-                        <th>When</th>
-                        <th>Actor</th>
-                        <th>Action</th>
-                        <th>Target</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {adminAuditLogs.data.map((row: AdminAuditLog) => (
-                        <tr key={row.id}>
-                          <td>{formatDate(row.created_at)}</td>
-                          <td>{row.actor_email}</td>
-                          <td>{row.action}</td>
-                          <td>
-                            {row.target_type}:{row.target_id}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {adminError && <p className="error">{adminError}</p>}
-            </div>
-          )}
-        </section>
-      )}
-
+      {resolvedView === "operations" && (
       <main className="content-grid">
         <section className="card create-card">
           <h2>Create Ticket</h2>
@@ -1014,12 +808,6 @@ function App() {
               <span>Closed: {closedCount}</span>
               <span>Total: {rows.length}</span>
               <span>Filtered: {totalRecords}</span>
-              <span>Unassigned: {queueSummary.data?.unassigned_total ?? "-"}</span>
-              <span>At Risk: {queueSummary.data?.at_risk_total ?? "-"}</span>
-              <span>Breached: {queueSummary.data?.breached_total ?? "-"}</span>
-              <span>Created 24h: {ticketMetrics.data?.created_last_24h ?? "-"}</span>
-              <span>Closed 24h: {ticketMetrics.data?.closed_last_24h ?? "-"}</span>
-              <span>Avg Resolve (min): {ticketMetrics.data?.avg_resolution_minutes ?? "-"}</span>
             </div>
           </div>
           {tickets.isLoading && <p>Loading tickets...</p>}
@@ -1205,6 +993,205 @@ function App() {
           )}
         </section>
       </main>
+      )}
+
+      {resolvedView === "kpi" && (
+        <section className="card analytics-card">
+          <h2>Operational KPI Dashboard</h2>
+          <div className="analytics-grid">
+            <div><span>Created last 24h</span><strong>{ticketMetrics.data?.created_last_24h ?? "-"}</strong></div>
+            <div><span>Closed last 24h</span><strong>{ticketMetrics.data?.closed_last_24h ?? "-"}</strong></div>
+            <div><span>In Progress</span><strong>{ticketMetrics.data?.in_progress_total ?? "-"}</strong></div>
+            <div><span>Waiting</span><strong>{ticketMetrics.data?.waiting_total ?? "-"}</strong></div>
+            <div><span>Resolved</span><strong>{ticketMetrics.data?.resolved_total ?? "-"}</strong></div>
+            <div><span>Closed</span><strong>{ticketMetrics.data?.closed_total ?? "-"}</strong></div>
+            <div><span>Open At Risk</span><strong>{ticketMetrics.data?.at_risk_open_total ?? "-"}</strong></div>
+            <div><span>Open Breached</span><strong>{ticketMetrics.data?.breached_open_total ?? "-"}</strong></div>
+          </div>
+        </section>
+      )}
+      </>
+      )}
+
+      {resolvedView === "admin" && isAdminUser && (
+        <section className="card admin-panel">
+          <div className="admin-head">
+            <h2>Admin Workspace</h2>
+            <div className="admin-nav">
+              <button className={adminSection === "users" ? "view-button active" : "view-button"} onClick={() => setAdminSection("users")}>Users</button>
+              <button className={adminSection === "routing" ? "view-button active" : "view-button"} onClick={() => setAdminSection("routing")}>Routing</button>
+              <button className={adminSection === "sla" ? "view-button active" : "view-button"} onClick={() => setAdminSection("sla")}>SLA</button>
+              <button className={adminSection === "audit" ? "view-button active" : "view-button"} onClick={() => setAdminSection("audit")}>Audit</button>
+              <button className={adminSection === "technical" ? "view-button active" : "view-button"} onClick={() => setAdminSection("technical")}>Technical</button>
+            </div>
+          </div>
+
+          <div className="admin-settings-grid">
+            {adminSection === "technical" && (
+              <div className="control-panel tech-panel">
+                <label>
+                  API Base URL
+                  <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                </label>
+                <label>
+                  API Key
+                  <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optional unless API auth enabled" />
+                </label>
+                <label>
+                  Intake Mode
+                  <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
+                    <option value="webhook">webhook (recommended)</option>
+                    <option value="api">api (/intake direct)</option>
+                  </select>
+                </label>
+                <label>
+                  Webhook URL
+                  <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
+                </label>
+                {!enforceAuth && (
+                  <label>
+                    User Role
+                    <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+                      <option value="admin">admin</option>
+                      <option value="operator">operator</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
+
+            {adminSection === "routing" && (
+              <div className="admin-section">
+                <h3>Tenant Notification Routing</h3>
+                <p className="subtitle">Define default recipients for notifications.</p>
+                <div className="inline-form">
+                  <input value={routeEmailsDraft} onChange={(e) => setRouteEmailsDraft(e.target.value)} placeholder="mail1@company.com, mail2@company.com" />
+                  <button onClick={() => updateRouteMutation.mutate(routeEmailsDraft)} disabled={updateRouteMutation.isPending}>
+                    {updateRouteMutation.isPending ? "Saving..." : "Save Routing"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {adminSection === "sla" && (
+              <div className="admin-section">
+                <h3>Tenant SLA Policy (minutes)</h3>
+                <div className="inline-form">
+                  <input value={slaP1} onChange={(e) => setSlaP1(e.target.value)} placeholder="P1" />
+                  <input value={slaP2} onChange={(e) => setSlaP2(e.target.value)} placeholder="P2" />
+                  <input value={slaP3} onChange={(e) => setSlaP3(e.target.value)} placeholder="P3" />
+                  <input value={slaP4} onChange={(e) => setSlaP4(e.target.value)} placeholder="P4" />
+                  <button onClick={() => updateSlaMutation.mutate()} disabled={updateSlaMutation.isPending}>
+                    {updateSlaMutation.isPending ? "Saving..." : "Save SLA"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {adminSection === "users" && (
+              <div className="admin-section">
+                <h3>User Management</h3>
+                <div className="create-form">
+                  <label>Email<input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} /></label>
+                  <label>Full Name<input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} /></label>
+                  <label>
+                    Role
+                    <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as "admin" | "operator" | "viewer")}>
+                      <option value="admin">admin</option><option value="operator">operator</option><option value="viewer">viewer</option>
+                    </select>
+                  </label>
+                  <label>Password<input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} /></label>
+                  <label>
+                    Active
+                    <select value={newUserActive ? "true" : "false"} onChange={(e) => setNewUserActive(e.target.value === "true")}>
+                      <option value="true">true</option><option value="false">false</option>
+                    </select>
+                  </label>
+                  <div className="create-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newUserEmail.trim() || !newUserName.trim() || !newUserPassword.trim()) {
+                          setAdminError("Email, full name and password are required.");
+                          return;
+                        }
+                        createAdminUserMutation.mutate();
+                      }}
+                      disabled={createAdminUserMutation.isPending}
+                    >
+                      {createAdminUserMutation.isPending ? "Creating..." : "Create User"}
+                    </button>
+                  </div>
+                </div>
+
+                {adminUsers.isLoading && <p>Loading users...</p>}
+                {adminUsers.isError && <p className="error">{getErrorMessage(adminUsers.error)}</p>}
+                {!!adminUsers.data?.length && (
+                  <table className="admin-users-table">
+                    <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th><th>Password Reset</th></tr></thead>
+                    <tbody>
+                      {adminUsers.data.map((user: AdminUser) => (
+                        <tr key={user.id}>
+                          <td>{user.email}</td><td>{user.full_name}</td><td>{user.role}</td>
+                          <td>
+                            <button className="secondary-button" onClick={() => toggleUserActiveMutation.mutate({ id: user.id, isActive: !user.is_active })} disabled={toggleUserActiveMutation.isPending}>
+                              {user.is_active ? "Disable" : "Enable"}
+                            </button>
+                          </td>
+                          <td>
+                            <div className="inline-form">
+                              <input type="password" value={passwordDraftByUserId[user.id] ?? ""} placeholder="New password" onChange={(e) => setPasswordDraftByUserId((prev) => ({ ...prev, [user.id]: e.target.value }))} />
+                              <button
+                                onClick={() => {
+                                  const password = (passwordDraftByUserId[user.id] ?? "").trim();
+                                  if (password.length < 8) {
+                                    setAdminError("Password must be at least 8 characters.");
+                                    return;
+                                  }
+                                  updateAdminPasswordMutation.mutate({ id: user.id, password });
+                                }}
+                                disabled={updateAdminPasswordMutation.isPending}
+                              >
+                                Reset
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {adminSection === "audit" && (
+              <div className="admin-section">
+                <h3>Recent Admin Audit</h3>
+                {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
+                {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
+                {!!adminAuditLogs.data?.length && (
+                  <table className="admin-users-table">
+                    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
+                    <tbody>
+                      {adminAuditLogs.data.map((row: AdminAuditLog) => (
+                        <tr key={row.id}>
+                          <td>{formatDate(row.created_at)}</td>
+                          <td>{row.actor_email}</td>
+                          <td>{row.action}</td>
+                          <td>{row.target_type}:{row.target_id}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {adminError && <p className="error">{adminError}</p>}
+          </div>
+        </section>
+      )}
       </>
       )}
     </div>
