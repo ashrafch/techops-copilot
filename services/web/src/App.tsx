@@ -97,6 +97,9 @@ function App() {
   const [assigneeEmail, setAssigneeEmail] = useState("");
   const [nextStatus, setNextStatus] = useState<TicketStatus>("OPEN");
   const [noteText, setNoteText] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [showAdminSettings, setShowAdminSettings] = useState(false);
   const [customEmailHistory, setCustomEmailHistory] = useState<string[]>(() => loadEmailHistory());
   const [createForm, setCreateForm] = useState({
     requesterName: "",
@@ -348,6 +351,13 @@ function App() {
   const closedCount = rows.filter((t) => t.status === "CLOSED").length;
   const isAuthMissing = enforceAuth && (!accessToken || meQuery.isError);
   const activeUser = meQuery.data ?? authUser;
+  const effectiveRole = activeUser?.role ?? userRole;
+  const isAdmin = effectiveRole === "admin";
+  const totalRecords = filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const page = Math.min(currentPage, totalPages);
+  const pageStart = (page - 1) * pageSize;
+  const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize);
 
   function handleLogout() {
     clearAuth();
@@ -415,35 +425,25 @@ function App() {
       <>
       <section className="control-panel">
         <label>
-          API Base URL
-          <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-        </label>
-        <label>
-          API Key
+          Tenant
           <input
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Optional unless API auth enabled"
+            value={tenantId}
+            onChange={(e) => {
+              setTenantId(e.target.value);
+              setCurrentPage(1);
+            }}
+            disabled={enforceAuth && !isAdmin}
           />
         </label>
         <label>
-          Intake Mode
-          <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
-            <option value="webhook">webhook (recommended)</option>
-            <option value="api">api (/intake direct)</option>
-          </select>
-        </label>
-        <label>
-          Webhook URL
-          <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
-        </label>
-        <label>
-          Tenant
-          <input value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
-        </label>
-        <label>
           Status
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+          >
             <option value="OPEN">OPEN</option>
             <option value="IN_PROGRESS">IN_PROGRESS</option>
             <option value="WAITING">WAITING</option>
@@ -453,20 +453,14 @@ function App() {
           </select>
         </label>
         <label>
-          User Role
-          <select
-            value={userRole}
-            onChange={(e) => setUserRole(e.target.value)}
-            disabled={enforceAuth}
-          >
-            <option value="admin">admin</option>
-            <option value="operator">operator</option>
-            <option value="viewer">viewer</option>
-          </select>
-        </label>
-        <label>
           Queue
-          <select value={queueMode} onChange={(e) => setQueueMode(e.target.value)}>
+          <select
+            value={queueMode}
+            onChange={(e) => {
+              setQueueMode(e.target.value);
+              setCurrentPage(1);
+            }}
+          >
             <option value="ALL">ALL</option>
             <option value="MY">MY_TICKETS</option>
             <option value="UNASSIGNED">UNASSIGNED</option>
@@ -478,7 +472,10 @@ function App() {
           My Assignee Email
           <input
             value={myAssigneeEmail}
-            onChange={(e) => setMyAssigneeEmail(e.target.value)}
+            onChange={(e) => {
+              setMyAssigneeEmail(e.target.value);
+              setCurrentPage(1);
+            }}
             placeholder="For MY queue"
           />
         </label>
@@ -486,9 +483,27 @@ function App() {
           Search
           <input
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              setCurrentPage(1);
+            }}
             placeholder="ID, subject, requester"
           />
+        </label>
+        <label>
+          Page Size
+          <select
+            value={String(pageSize)}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+          >
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
         </label>
         <label>
           Actions
@@ -500,6 +515,54 @@ function App() {
           </button>
         </label>
       </section>
+
+      {isAdmin && (
+        <section className="card admin-panel">
+          <div className="admin-head">
+            <h2>Admin Settings</h2>
+            <button className="secondary-button" onClick={() => setShowAdminSettings((prev) => !prev)}>
+              {showAdminSettings ? "Hide" : "Show"} Technical Settings
+            </button>
+          </div>
+          {showAdminSettings && (
+            <div className="control-panel tech-panel">
+              <label>
+                API Base URL
+                <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+              </label>
+              <label>
+                API Key
+                <input
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Optional unless API auth enabled"
+                />
+              </label>
+              <label>
+                Intake Mode
+                <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
+                  <option value="webhook">webhook (recommended)</option>
+                  <option value="api">api (/intake direct)</option>
+                </select>
+              </label>
+              <label>
+                Webhook URL
+                <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
+              </label>
+              {!enforceAuth && (
+                <label>
+                  User Role
+                  <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+                    <option value="admin">admin</option>
+                    <option value="operator">operator</option>
+                    <option value="viewer">viewer</option>
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       <main className="content-grid">
         <section className="card create-card">
@@ -616,6 +679,7 @@ function App() {
               <span>Open: {openCount}</span>
               <span>Closed: {closedCount}</span>
               <span>Total: {rows.length}</span>
+              <span>Filtered: {totalRecords}</span>
               <span>Unassigned: {queueSummary.data?.unassigned_total ?? "-"}</span>
               <span>At Risk: {queueSummary.data?.at_risk_total ?? "-"}</span>
               <span>Breached: {queueSummary.data?.breached_total ?? "-"}</span>
@@ -637,7 +701,7 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((ticket: Ticket) => (
+                {pagedRows.map((ticket: Ticket) => (
                   <tr
                     key={ticket.ticket_id}
                     className={ticket.ticket_id === selectedTicketId ? "selected" : ""}
@@ -654,6 +718,27 @@ function App() {
                 ))}
               </tbody>
             </table>
+          )}
+          {!tickets.isLoading && !tickets.isError && totalRecords > 0 && (
+            <div className="pager-row">
+              <button
+                className="secondary-button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={page <= 1}
+              >
+                Prev
+              </button>
+              <span>
+                Page {page} / {totalPages}
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={page >= totalPages}
+              >
+                Next
+              </button>
+            </div>
           )}
         </section>
 
