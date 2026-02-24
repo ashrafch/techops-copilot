@@ -4,8 +4,9 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.auth import require_api_key
+from app.core.auth import get_current_user, require_api_key
 from app.core.rbac import require_operator_role, require_viewer_role
+from app.core.tenant_guard import enforce_tenant_access
 from app.db.events import log_event
 from app.db.session import get_conn
 from app.domain.sla_service import compute_sla_state
@@ -110,7 +111,9 @@ def list_tickets(
     sla_state: SlaStateFilter = "ALL",
     limit: int = Query(50, ge=1, le=500),
     _: None = Depends(require_viewer_role),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     where_clauses = ["tenant_id = %s"]
     params: list[object] = [tenant_id]
 
@@ -152,7 +155,9 @@ def queue_summary(
     tenant_id: str = Query(..., min_length=1),
     assignee_email: str = Query("", min_length=0),
     _: None = Depends(require_viewer_role),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -202,7 +207,9 @@ def queue_summary(
 def ticket_metrics(
     tenant_id: str = Query(..., min_length=1),
     _: None = Depends(require_viewer_role),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -268,7 +275,7 @@ def ticket_metrics(
 
 
 @router.get("/tickets/{ticket_id}", response_model=TicketOut)
-def get_ticket(ticket_id: str, _: None = Depends(require_viewer_role)):
+def get_ticket(ticket_id: str, _: None = Depends(require_viewer_role), current_user=Depends(get_current_user)):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -286,6 +293,7 @@ def get_ticket(ticket_id: str, _: None = Depends(require_viewer_role)):
 
     if not row:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    enforce_tenant_access(requested_tenant_id=row[1], current_user=current_user)
 
     return _row_to_ticket(row, datetime.utcnow())
 
@@ -295,6 +303,7 @@ def update_ticket_status(
     ticket_id: str,
     payload: TicketStatusUpdate,
     _: None = Depends(require_operator_role),
+    current_user=Depends(get_current_user),
 ):
     with get_conn() as conn:
         conn.autocommit = False
@@ -305,6 +314,9 @@ def update_ticket_status(
                 if existing is None:
                     conn.rollback()
                     raise HTTPException(status_code=404, detail="Ticket not found")
+                cur.execute("SELECT tenant_id FROM tickets WHERE ticket_id = %s", (ticket_id,))
+                tenant_row = cur.fetchone()
+                enforce_tenant_access(requested_tenant_id=str(tenant_row[0]), current_user=current_user)
 
                 cur.execute(
                     """
@@ -356,6 +368,7 @@ def assign_ticket(
     ticket_id: str,
     payload: TicketAssignmentUpdate,
     _: None = Depends(require_operator_role),
+    current_user=Depends(get_current_user),
 ):
     assignee_name = payload.assignee_name.strip()
     assignee_email = str(payload.assignee_email).strip().lower()
@@ -364,6 +377,12 @@ def assign_ticket(
         conn.autocommit = False
         try:
             with conn.cursor() as cur:
+                cur.execute("SELECT tenant_id FROM tickets WHERE ticket_id = %s", (ticket_id,))
+                tenant_row = cur.fetchone()
+                if tenant_row is None:
+                    conn.rollback()
+                    raise HTTPException(status_code=404, detail="Ticket not found")
+                enforce_tenant_access(requested_tenant_id=str(tenant_row[0]), current_user=current_user)
                 cur.execute(
                     """
                     UPDATE tickets
@@ -405,15 +424,18 @@ def add_ticket_note(
     ticket_id: str,
     payload: TicketNoteCreate,
     _: None = Depends(require_operator_role),
+    current_user=Depends(get_current_user),
 ):
     with get_conn() as conn:
         conn.autocommit = False
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM tickets WHERE ticket_id = %s", (ticket_id,))
-                if cur.fetchone() is None:
+                cur.execute("SELECT tenant_id FROM tickets WHERE ticket_id = %s", (ticket_id,))
+                tenant_row = cur.fetchone()
+                if tenant_row is None:
                     conn.rollback()
                     raise HTTPException(status_code=404, detail="Ticket not found")
+                enforce_tenant_access(requested_tenant_id=str(tenant_row[0]), current_user=current_user)
 
             log_event(
                 conn,
@@ -430,6 +452,14 @@ def add_ticket_note(
 
 
 @router.patch("/tickets/{ticket_id}/close")
-def close_ticket(ticket_id: str, _: None = Depends(require_operator_role)):
+def close_ticket(
+    ticket_id: str,
+    _: None = Depends(require_operator_role),
+    current_user=Depends(get_current_user),
+):
     # keep backward compatibility endpoint
-    return update_ticket_status(ticket_id=ticket_id, payload=TicketStatusUpdate(status="CLOSED"))
+    return update_ticket_status(
+        ticket_id=ticket_id,
+        payload=TicketStatusUpdate(status="CLOSED"),
+        current_user=current_user,
+    )

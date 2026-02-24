@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+import asyncio
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.rate_limit import is_rate_limited
 from app.db.session import DatabaseConnectionError, DatabaseNotConfiguredError
+from app.domain.sla_monitor_job import list_tenants_for_scheduler, run_sla_monitor_for_tenant
 from app.routers.admin import router as admin_router
 from app.routers.automation import router as automation_router
 from app.routers.auth_router import router as auth_router
@@ -104,3 +106,46 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(automation_router)
+
+# Versioned API aliases for enterprise integrations.
+app.include_router(intake_router, prefix="/v1")
+app.include_router(tickets_router, prefix="/v1")
+app.include_router(events_router, prefix="/v1")
+app.include_router(routes_router, prefix="/v1")
+app.include_router(health_router, prefix="/v1")
+app.include_router(auth_router, prefix="/v1")
+app.include_router(admin_router, prefix="/v1")
+app.include_router(automation_router, prefix="/v1")
+
+
+@app.on_event("startup")
+async def startup_scheduler():
+    settings = get_settings()
+    if not settings.sla_monitor_scheduler_enabled:
+        return
+
+    async def _runner():
+        while True:
+            try:
+                tenants = list_tenants_for_scheduler()
+                for tenant_id in tenants:
+                    result = run_sla_monitor_for_tenant(tenant_id=tenant_id, limit=500)
+                    logger.info(
+                        "scheduler=sla_monitor tenant_id=%s scanned=%s at_risk=%s breached=%s",
+                        tenant_id,
+                        result["scanned"],
+                        result["at_risk_alerted"],
+                        result["breached_alerted"],
+                    )
+            except Exception:
+                logger.exception("scheduler=sla_monitor_failed")
+            await asyncio.sleep(max(30, settings.sla_monitor_scheduler_interval_seconds))
+
+    app.state.sla_scheduler_task = asyncio.create_task(_runner())
+
+
+@app.on_event("shutdown")
+async def shutdown_scheduler():
+    task = getattr(app.state, "sla_scheduler_task", None)
+    if task is not None:
+        task.cancel()

@@ -7,7 +7,8 @@ from urllib import request as urllib_request
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.auth import require_api_key
+from app.core.auth import get_current_user, require_api_key
+from app.core.tenant_guard import enforce_tenant_access
 from app.db.events import log_event
 from app.db.session import get_conn
 from app.db.ticket_id import next_ticket_id
@@ -303,46 +304,61 @@ def _execute_action_webhook(
         method="POST",
     )
 
-    try:
-        with urllib_request.urlopen(req, timeout=6) as response:
-            body = response.read().decode("utf-8", errors="ignore")
+    last_error = ""
+    for attempt in range(1, 4):
+        try:
+            with urllib_request.urlopen(req, timeout=6) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+                _insert_action_log(
+                    conn,
+                    tenant_id=tenant_id,
+                    ticket_id=ticket_id,
+                    action_name="external_orchestration",
+                    status="SUCCESS",
+                    detail=f"HTTP {response.status} attempt={attempt}",
+                    request_payload=payload,
+                    response_payload={"status": response.status, "body": body[:1000], "attempt": attempt},
+                )
+                return
+        except urllib_error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            last_error = f"HTTP {exc.code}"
             _insert_action_log(
                 conn,
                 tenant_id=tenant_id,
                 ticket_id=ticket_id,
                 action_name="external_orchestration",
-                status="SUCCESS",
-                detail=f"HTTP {response.status}",
+                status="FAILED",
+                detail=f"{last_error} attempt={attempt}",
                 request_payload=payload,
-                response_payload={"status": response.status, "body": body[:1000]},
+                response_payload={"status": exc.code, "body": body[:1000], "attempt": attempt},
             )
-    except urllib_error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        _insert_action_log(
-            conn,
-            tenant_id=tenant_id,
-            ticket_id=ticket_id,
-            action_name="external_orchestration",
-            status="FAILED",
-            detail=f"HTTP {exc.code}",
-            request_payload=payload,
-            response_payload={"status": exc.code, "body": body[:1000]},
-        )
-    except Exception as exc:
-        _insert_action_log(
-            conn,
-            tenant_id=tenant_id,
-            ticket_id=ticket_id,
-            action_name="external_orchestration",
-            status="FAILED",
-            detail=str(exc),
-            request_payload=payload,
-            response_payload={},
+        except Exception as exc:
+            last_error = str(exc)
+            _insert_action_log(
+                conn,
+                tenant_id=tenant_id,
+                ticket_id=ticket_id,
+                action_name="external_orchestration",
+                status="FAILED",
+                detail=f"{last_error} attempt={attempt}",
+                request_payload=payload,
+                response_payload={"attempt": attempt},
+            )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO action_dead_letters (tenant_id, ticket_id, action_name, reason, payload)
+            VALUES (%s, %s, 'external_orchestration', %s, %s::jsonb)
+            """,
+            (tenant_id, ticket_id, last_error or "unknown", json.dumps(payload)),
         )
 
 
 @router.post("/external-intake", response_model=ExternalTriggerResponse)
-def automation_external_intake(payload: ExternalTriggerRequest):
+def automation_external_intake(payload: ExternalTriggerRequest, current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=payload.tenant_id, current_user=current_user)
     priority, reason = priority_from_signal(payload.event_type, payload.severity)
     playbook = recommend_playbook(payload.event_type, payload.severity)
     event_at = payload.occurred_at or datetime.utcnow()
@@ -600,7 +616,8 @@ def automation_external_intake(payload: ExternalTriggerRequest):
 
 
 @router.post("/sla-monitor", response_model=SlaMonitorResponse)
-def automation_sla_monitor(payload: SlaMonitorRequest):
+def automation_sla_monitor(payload: SlaMonitorRequest, current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=payload.tenant_id, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
         try:
@@ -688,7 +705,9 @@ def list_decisions(
     tenant_id: str = Query(..., min_length=1),
     ticket_id: str = Query("", min_length=0),
     limit: int = Query(100, ge=1, le=500),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     where = ["tenant_id = %s"]
     params: list[object] = [tenant_id]
     if ticket_id.strip():
@@ -735,7 +754,9 @@ def list_actions(
     tenant_id: str = Query(..., min_length=1),
     ticket_id: str = Query("", min_length=0),
     limit: int = Query(100, ge=1, le=500),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     where = ["tenant_id = %s"]
     params: list[object] = [tenant_id]
     if ticket_id.strip():
@@ -771,7 +792,8 @@ def list_actions(
 
 
 @router.post("/memory/feedback")
-def create_memory_feedback(payload: MemoryFeedbackIn):
+def create_memory_feedback(payload: MemoryFeedbackIn, current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=payload.tenant_id, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
         try:
@@ -807,7 +829,9 @@ def memory_suggestions(
     event_type: str = Query(..., min_length=1),
     asset_id: str = Query("", min_length=0),
     limit: int = Query(10, ge=1, le=50),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         if asset_id.strip():
             cur.execute(
@@ -845,7 +869,9 @@ def memory_suggestions(
 def proactive_summary(
     tenant_id: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """

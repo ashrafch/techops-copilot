@@ -26,6 +26,8 @@ class AuthTokenClaims:
     role: str
     tenant_id: str
     exp: int
+    sid: str
+    typ: str
 
 
 def issue_auth_token(
@@ -36,10 +38,20 @@ def issue_auth_token(
     role: str,
     tenant_id: str,
     ttl_minutes: int,
+    sid: str,
+    token_type: str = "access",
 ) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     exp = int(time.time()) + (ttl_minutes * 60)
-    payload = {"sub": sub, "email": email, "role": role, "tenant_id": tenant_id, "exp": exp}
+    payload = {
+        "sub": sub,
+        "email": email,
+        "role": role,
+        "tenant_id": tenant_id,
+        "exp": exp,
+        "sid": sid,
+        "typ": token_type,
+    }
 
     header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
@@ -77,4 +89,6 @@ def verify_auth_token(token: str, secret: str) -> AuthTokenClaims:
         role=str(payload.get("role", "")),
         tenant_id=str(payload.get("tenant_id", "")),
         exp=exp,
+        sid=str(payload.get("sid", "")),
+        typ=str(payload.get("typ", "access")),
     )

@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.auth import get_current_user, require_api_key
+from app.core.config import get_settings
 from app.core.identity import resolve_actor
 from app.core.rbac import require_admin_role
-from app.core.security import generate_salt_hex, hash_password
+from app.core.security import generate_salt_hex, hash_password, validate_password_policy
 from app.db.audit import log_admin_action
 from app.db.session import get_conn
 
@@ -58,6 +59,18 @@ class AdminAuditLogOut(BaseModel):
     target_id: str
     details: dict[str, Any]
     created_at: datetime
+
+
+class GdprExportOut(BaseModel):
+    tenant_id: str
+    tickets: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+    admin_audit: list[dict[str, Any]]
+
+
+class SecurityCleanupOut(BaseModel):
+    deleted_security_logs: int
+    deleted_login_attempts: int
 
 
 @router.get("/admin/users", response_model=List[AdminUserOut])
@@ -144,6 +157,17 @@ def create_admin_user(
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     current_user=Depends(get_current_user),
 ):
+    settings = get_settings()
+    ok, msg = validate_password_policy(
+        payload.password,
+        min_length=settings.password_min_length,
+        require_upper=settings.password_require_upper,
+        require_lower=settings.password_require_lower,
+        require_digit=settings.password_require_digit,
+        require_symbol=settings.password_require_symbol,
+    )
+    if not ok:
+        raise HTTPException(status_code=422, detail=msg)
     salt = generate_salt_hex()
     pwd_hash = hash_password(payload.password, salt)
     actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
@@ -275,6 +299,17 @@ def update_admin_user_password(
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     current_user=Depends(get_current_user),
 ):
+    settings = get_settings()
+    ok, msg = validate_password_policy(
+        payload.password,
+        min_length=settings.password_min_length,
+        require_upper=settings.password_require_upper,
+        require_lower=settings.password_require_lower,
+        require_digit=settings.password_require_digit,
+        require_symbol=settings.password_require_symbol,
+    )
+    if not ok:
+        raise HTTPException(status_code=422, detail=msg)
     salt = generate_salt_hex()
     pwd_hash = hash_password(payload.password, salt)
     actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
@@ -317,3 +352,128 @@ def update_admin_user_password(
             raise
 
     return {"ok": True}
+
+
+@router.get("/admin/gdpr/export", response_model=GdprExportOut)
+def gdpr_export(
+    tenant_id: str = Query(..., min_length=1),
+):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticket_id, status, subject, priority, requester_name, requester_email, created_at
+            FROM tickets
+            WHERE tenant_id = %s
+            ORDER BY created_at DESC
+            LIMIT 5000
+            """,
+            (tenant_id,),
+        )
+        tickets_rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT te.ticket_id, te.event_type, te.message, te.meta, te.created_at
+            FROM ticket_events te
+            JOIN tickets t ON t.ticket_id = te.ticket_id
+            WHERE t.tenant_id = %s
+            ORDER BY te.created_at DESC
+            LIMIT 10000
+            """,
+            (tenant_id,),
+        )
+        events_rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT action, target_type, target_id, details, created_at
+            FROM admin_audit_logs
+            WHERE tenant_id = %s
+            ORDER BY created_at DESC
+            LIMIT 5000
+            """,
+            (tenant_id,),
+        )
+        audit_rows = cur.fetchall()
+    return GdprExportOut(
+        tenant_id=tenant_id,
+        tickets=[
+            {
+                "ticket_id": r[0],
+                "status": r[1],
+                "subject": r[2],
+                "priority": r[3],
+                "requester_name": r[4],
+                "requester_email": r[5],
+                "created_at": r[6],
+            }
+            for r in tickets_rows
+        ],
+        events=[
+            {"ticket_id": r[0], "event_type": r[1], "message": r[2], "meta": r[3] or {}, "created_at": r[4]}
+            for r in events_rows
+        ],
+        admin_audit=[
+            {"action": r[0], "target_type": r[1], "target_id": r[2], "details": r[3] or {}, "created_at": r[4]}
+            for r in audit_rows
+        ],
+    )
+
+
+@router.delete("/admin/gdpr/purge")
+def gdpr_purge(
+    tenant_id: str = Query(..., min_length=1),
+    before_days: int = Query(365, ge=1, le=3650),
+):
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM tickets
+                    WHERE tenant_id = %s
+                      AND created_at < NOW() - (%s || ' days')::interval
+                    RETURNING ticket_id
+                    """,
+                    (tenant_id, before_days),
+                )
+                deleted = [r[0] for r in cur.fetchall()]
+            conn.commit()
+            return {"ok": True, "deleted_tickets": len(deleted)}
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.post("/admin/security/cleanup", response_model=SecurityCleanupOut)
+def security_cleanup():
+    settings = get_settings()
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM security_audit_logs
+                    WHERE created_at < NOW() - (%s || ' days')::interval
+                    RETURNING id
+                    """,
+                    (settings.security_log_retention_days,),
+                )
+                deleted_security = len(cur.fetchall())
+                cur.execute(
+                    """
+                    DELETE FROM auth_login_attempts
+                    WHERE created_at < NOW() - (%s || ' days')::interval
+                    RETURNING id
+                    """,
+                    (settings.security_log_retention_days,),
+                )
+                deleted_attempts = len(cur.fetchall())
+            conn.commit()
+            return SecurityCleanupOut(
+                deleted_security_logs=deleted_security,
+                deleted_login_attempts=deleted_attempts,
+            )
+        except Exception:
+            conn.rollback()
+            raise

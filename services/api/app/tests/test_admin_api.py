@@ -44,7 +44,7 @@ def test_admin_user_crud_with_role_header(monkeypatch):
     pwd_resp = client.patch(
         f"/admin/users/{user_id}/password",
         headers={"X-User-Role": "admin"},
-        json={"password": "NewPass123!"},
+        json={"password": "NewPass123!X"},
     )
     assert pwd_resp.status_code == 200
     assert pwd_resp.json()["ok"] is True
@@ -66,4 +66,28 @@ def test_admin_endpoints_block_non_admin(monkeypatch):
 
     resp = client.get("/admin/users", headers={"X-User-Role": "operator"})
     assert resp.status_code == 403
+    get_settings.cache_clear()
+
+
+def test_admin_create_user_enforces_password_policy(monkeypatch):
+    monkeypatch.setenv("ENFORCE_RBAC", "true")
+    monkeypatch.setenv("ENFORCE_AUTH", "false")
+    monkeypatch.setenv("PASSWORD_MIN_LENGTH", "12")
+    monkeypatch.setenv("PASSWORD_REQUIRE_SYMBOL", "true")
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    resp = client.post(
+        "/admin/users",
+        headers={"X-User-Role": "admin"},
+        json={
+            "email": f"weak.{uuid4().hex[:6]}@example.com",
+            "full_name": "Weak Password User",
+            "password": "weakpassword12",
+            "role": "operator",
+            "tenant_id": "demo",
+            "is_active": True,
+        },
+    )
+    assert resp.status_code == 422
     get_settings.cache_clear()

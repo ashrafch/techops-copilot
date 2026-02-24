@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.db.session import get_conn
 from app.main import app
 
 
@@ -9,6 +10,9 @@ def test_login_success_and_me(monkeypatch):
     monkeypatch.setenv("ENFORCE_RBAC", "true")
     monkeypatch.setenv("AUTH_SECRET_KEY", "test_secret_key")
     get_settings.cache_clear()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM auth_login_attempts WHERE LOWER(email) = LOWER(%s)", ("operator@example.com",))
+        conn.commit()
     client = TestClient(app)
 
     login = client.post(
@@ -29,6 +33,9 @@ def test_login_invalid_credentials(monkeypatch):
     monkeypatch.setenv("ENFORCE_AUTH", "true")
     monkeypatch.setenv("AUTH_SECRET_KEY", "test_secret_key")
     get_settings.cache_clear()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM auth_login_attempts WHERE LOWER(email) = LOWER(%s)", ("operator@example.com",))
+        conn.commit()
     client = TestClient(app)
 
     login = client.post(

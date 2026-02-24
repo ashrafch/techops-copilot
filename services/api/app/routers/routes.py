@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.core.auth import get_current_user, require_api_key
 from app.core.identity import resolve_actor
 from app.core.rbac import require_admin_role, require_viewer_role
+from app.core.tenant_guard import enforce_tenant_access
 from app.db.audit import log_admin_action
 from app.db.session import get_conn
 
@@ -86,7 +87,8 @@ def _list_to_csv(values: list[str]) -> str:
 
 
 @router.get("/tenant-routes/{tenant_id}", response_model=TenantRouteOut)
-def get_tenant_route(tenant_id: str, _: None = Depends(require_viewer_role)):
+def get_tenant_route(tenant_id: str, _: None = Depends(require_viewer_role), current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -121,6 +123,7 @@ def update_tenant_route(
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     to_csv = _list_to_csv([str(item) for item in payload.to_emails])
     if not to_csv:
         raise HTTPException(status_code=422, detail="to_emails must contain at least one email")
@@ -174,7 +177,9 @@ def list_tenant_email_history(
     tenant_id: str = Query(..., min_length=1),
     limit: int = Query(50, ge=1, le=200),
     _: None = Depends(require_viewer_role),
+    current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -212,7 +217,8 @@ def list_tenant_email_history(
 
 
 @router.get("/tenant-sla-policies/{tenant_id}", response_model=TenantSlaPolicyOut)
-def get_tenant_sla_policy(tenant_id: str, _: None = Depends(require_viewer_role)):
+def get_tenant_sla_policy(tenant_id: str, _: None = Depends(require_viewer_role), current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -244,6 +250,7 @@ def update_tenant_sla_policy(
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
@@ -301,7 +308,8 @@ def update_tenant_sla_policy(
 
 
 @router.get("/tenant-automation-policies/{tenant_id}", response_model=TenantAutomationPolicyOut)
-def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewer_role)):
+def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewer_role), current_user=Depends(get_current_user)):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -334,6 +342,7 @@ def update_tenant_automation_policy(
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     current_user=Depends(get_current_user),
 ):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
     actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False

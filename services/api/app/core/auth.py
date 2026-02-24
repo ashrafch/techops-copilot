@@ -5,6 +5,7 @@ from fastapi import Header, HTTPException
 
 from app.core.auth_token import AuthTokenClaims, TokenError, verify_auth_token
 from app.core.config import get_settings
+from app.db.session import get_conn
 
 logger = logging.getLogger("app.auth")
 
@@ -42,4 +43,19 @@ def get_current_user(
         claims = verify_auth_token(token=token, secret=settings.auth_secret_key)
     except TokenError:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if claims.typ != "access":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if settings.enforce_auth:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT revoked_at
+                FROM auth_sessions
+                WHERE session_id = %s
+                """,
+                (claims.sid,),
+            )
+            row = cur.fetchone()
+        if row is None or row[0] is not None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
     return claims
