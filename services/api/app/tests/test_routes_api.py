@@ -71,6 +71,32 @@ def test_get_and_patch_tenant_sla_policy():
     assert payload["p4_minutes"] == 720
 
 
+def test_get_and_patch_tenant_automation_policy():
+    client = TestClient(app)
+    read = client.get("/tenant-automation-policies/demo")
+    assert read.status_code == 200
+    assert read.json()["tenant_id"] == "demo"
+    assert "action_webhook_url" in read.json()
+
+    patch = client.patch(
+        "/tenant-automation-policies/demo",
+        json={
+            "correlation_window_minutes": 120,
+            "at_risk_lead_minutes": 30,
+            "auto_assign_name": "Automation Dispatcher",
+            "auto_assign_email": "dispatch@example.com",
+            "action_webhook_url": "https://example.com/agent-hook",
+            "action_webhook_token": "temp-token",
+        },
+    )
+    assert patch.status_code == 200
+    payload = patch.json()
+    assert payload["correlation_window_minutes"] == 120
+    assert payload["at_risk_lead_minutes"] == 30
+    assert payload["auto_assign_email"] == "dispatch@example.com"
+    assert payload["action_webhook_url"] == "https://example.com/agent-hook"
+
+
 def test_admin_audit_logs_include_route_and_sla_updates(monkeypatch):
     monkeypatch.setenv("ENFORCE_RBAC", "true")
     monkeypatch.setenv("ENFORCE_AUTH", "false")
@@ -90,10 +116,24 @@ def test_admin_audit_logs_include_route_and_sla_updates(monkeypatch):
         headers={"X-User-Role": "admin"},
     )
     assert route_patch.status_code == 200
+    automation_patch = client.patch(
+        "/tenant-automation-policies/demo",
+        json={
+            "correlation_window_minutes": 240,
+            "at_risk_lead_minutes": 45,
+            "auto_assign_name": "Automation Dispatcher",
+            "auto_assign_email": "dispatch@example.com",
+            "action_webhook_url": "",
+            "action_webhook_token": "",
+        },
+        headers={"X-User-Role": "admin"},
+    )
+    assert automation_patch.status_code == 200
 
     audit = client.get("/admin/audit-logs", params={"tenant_id": "demo"}, headers={"X-User-Role": "admin"})
     assert audit.status_code == 200
     actions = [item["action"] for item in audit.json()]
     assert "TENANT_SLA_POLICY_UPDATED" in actions
     assert "TENANT_ROUTE_UPDATED" in actions
+    assert "TENANT_AUTOMATION_POLICY_UPDATED" in actions
     get_settings.cache_clear()

@@ -119,6 +119,16 @@ export interface AdminAuditLog {
   created_at: string;
 }
 
+export interface TenantAutomationPolicy {
+  tenant_id: string;
+  correlation_window_minutes: number;
+  at_risk_lead_minutes: number;
+  auto_assign_name: string;
+  auto_assign_email?: string | null;
+  action_webhook_url: string;
+  updated_at: string;
+}
+
 export interface IntakeRequest {
   tenant_id: string;
   source?: string;
@@ -155,6 +165,64 @@ export interface WebhookIntakeResponse {
   status: TicketStatus;
   tenant_id: string;
   notified_to?: string[];
+}
+
+export interface SlaMonitorResponse {
+  tenant_id: string;
+  scanned: number;
+  at_risk_alerted: number;
+  breached_alerted: number;
+  ticket_ids: string[];
+}
+
+export interface AgentDecisionLog {
+  id: number;
+  tenant_id: string;
+  ticket_id: string;
+  source_system: string;
+  event_id: string;
+  event_type: string;
+  severity: string;
+  decision: string;
+  priority: string;
+  reason: string;
+  confidence: number;
+  memory_hint: string;
+  playbook: Record<string, string>;
+  created_at: string;
+}
+
+export interface AgentActionRun {
+  id: number;
+  tenant_id: string;
+  ticket_id: string;
+  action_name: string;
+  status: "SKIPPED" | "SUCCESS" | "FAILED";
+  detail: string;
+  request_payload: Record<string, unknown>;
+  response_payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AgentProactiveAction {
+  ticket_id: string;
+  priority: string;
+  sla_state: string;
+  recommendation: string;
+}
+
+export interface AgentProactiveSummary {
+  tenant_id: string;
+  predicted_breach_2h: number;
+  unassigned_open: number;
+  next_best_actions: AgentProactiveAction[];
+}
+
+export interface AgentMemorySuggestion {
+  ticket_id: string;
+  outcome_score: number;
+  resolution_note: string;
+  created_at: string;
 }
 
 interface ApiClientOptions {
@@ -330,6 +398,45 @@ export function createApiClient(options: ApiClientOptions) {
       payload: { p1_minutes: number; p2_minutes: number; p3_minutes: number; p4_minutes: number },
     ) =>
       patchJson<TenantSlaPolicy>(`/tenant-sla-policies/${encodeURIComponent(tenantId)}`, payload),
+    getTenantAutomationPolicy: (tenantId: string) =>
+      getJson<TenantAutomationPolicy>(`/tenant-automation-policies/${encodeURIComponent(tenantId)}`),
+    updateTenantAutomationPolicy: (
+      tenantId: string,
+      payload: {
+        correlation_window_minutes: number;
+        at_risk_lead_minutes: number;
+        auto_assign_name: string;
+        auto_assign_email?: string | null;
+        action_webhook_url?: string;
+        action_webhook_token?: string;
+      },
+    ) => patchJson<TenantAutomationPolicy>(`/tenant-automation-policies/${encodeURIComponent(tenantId)}`, payload),
+    runSlaMonitor: (tenantId: string, limit = 200) =>
+      postJson<SlaMonitorResponse>("/automation/sla-monitor", { tenant_id: tenantId, limit }),
+    listAgentDecisions: (tenantId: string, limit = 100) =>
+      getJson<AgentDecisionLog[]>(
+        `/automation/decisions?tenant_id=${encodeURIComponent(tenantId)}&limit=${limit}`,
+      ),
+    listAgentActions: (tenantId: string, limit = 100) =>
+      getJson<AgentActionRun[]>(
+        `/automation/actions?tenant_id=${encodeURIComponent(tenantId)}&limit=${limit}`,
+      ),
+    getAgentProactiveSummary: (tenantId: string, limit = 20) =>
+      getJson<AgentProactiveSummary>(
+        `/automation/proactive-summary?tenant_id=${encodeURIComponent(tenantId)}&limit=${limit}`,
+      ),
+    addAgentMemoryFeedback: (payload: {
+      tenant_id: string;
+      ticket_id: string;
+      event_type: string;
+      asset_id: string;
+      outcome_score: number;
+      resolution_note: string;
+    }) => postJson<{ ok: boolean; id: number }>("/automation/memory/feedback", payload),
+    listAgentMemorySuggestions: (tenantId: string, eventType: string, assetId = "", limit = 10) =>
+      getJson<AgentMemorySuggestion[]>(
+        `/automation/memory/suggestions?tenant_id=${encodeURIComponent(tenantId)}&event_type=${encodeURIComponent(eventType)}&asset_id=${encodeURIComponent(assetId)}&limit=${limit}`,
+      ),
     listAdminUsers: (tenantId = "") =>
       getJson<AdminUser[]>(
         `/admin/users${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,

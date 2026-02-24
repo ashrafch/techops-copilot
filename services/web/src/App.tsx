@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   createApiClient,
+  type AgentActionRun,
+  type AgentDecisionLog,
+  type AgentMemorySuggestion,
   type AdminAuditLog,
   type AdminUser,
   type IntakeRequest,
@@ -101,6 +104,7 @@ function App() {
   const [statusError, setStatusError] = useState("");
   const [noteError, setNoteError] = useState("");
   const [notificationEmail, setNotificationEmail] = useState("");
+  const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [assigneeName, setAssigneeName] = useState("");
   const [assigneeEmail, setAssigneeEmail] = useState("");
   const [nextStatus, setNextStatus] = useState<TicketStatus>("OPEN");
@@ -108,13 +112,24 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [activeView, setActiveView] = useState<"operations" | "kpi" | "admin">("operations");
-  const [adminSection, setAdminSection] = useState<"users" | "routing" | "sla" | "audit" | "technical">("users");
+  const [adminSection, setAdminSection] = useState<"users" | "routing" | "sla" | "automation" | "audit" | "technical">("users");
+  const [showTechnicalPanel, setShowTechnicalPanel] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [routeEmailsDraft, setRouteEmailsDraft] = useState("");
   const [slaP1, setSlaP1] = useState("");
   const [slaP2, setSlaP2] = useState("");
   const [slaP3, setSlaP3] = useState("");
   const [slaP4, setSlaP4] = useState("");
+  const [automationWindow, setAutomationWindow] = useState("");
+  const [automationAtRiskLead, setAutomationAtRiskLead] = useState("");
+  const [automationAssignName, setAutomationAssignName] = useState("");
+  const [automationAssignEmail, setAutomationAssignEmail] = useState("");
+  const [automationWebhookUrl, setAutomationWebhookUrl] = useState("");
+  const [automationWebhookToken, setAutomationWebhookToken] = useState("");
+  const [slaMonitorResult, setSlaMonitorResult] = useState("");
+  const [memoryScore, setMemoryScore] = useState("4");
+  const [memoryNote, setMemoryNote] = useState("");
+  const [agentError, setAgentError] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState<"admin" | "operator" | "viewer">("operator");
@@ -236,6 +251,11 @@ function App() {
     queryFn: () => api.getTenantSlaPolicy(tenantId),
     enabled: isAdminUser && (!enforceAuth || Boolean(accessToken)),
   });
+  const tenantAutomationPolicy = useQuery({
+    queryKey: ["tenant-automation-policy", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getTenantAutomationPolicy(tenantId),
+    enabled: isAdminUser && (!enforceAuth || Boolean(accessToken)),
+  });
 
   const adminUsers = useQuery({
     queryKey: ["admin-users", baseUrl, apiKey, accessToken, userRole, tenantId],
@@ -246,6 +266,41 @@ function App() {
     queryKey: ["admin-audit-logs", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.listAdminAuditLogs(tenantId, 100),
     enabled: isAdminUser && activeView === "admin" && (!enforceAuth || Boolean(accessToken)),
+  });
+  const agentProactiveSummary = useQuery({
+    queryKey: ["agent-proactive-summary", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.getAgentProactiveSummary(tenantId, 20),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentDecisionLogs = useQuery({
+    queryKey: ["agent-decisions", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentDecisions(tenantId, 50),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentActionRuns = useQuery({
+    queryKey: ["agent-actions", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentActions(tenantId, 50),
+    enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const agentMemorySuggestions = useQuery({
+    queryKey: [
+      "agent-memory-suggestions",
+      baseUrl,
+      apiKey,
+      accessToken,
+      userRole,
+      tenantId,
+      selectedTicket.data?.machine_station ?? "",
+      selectedTicket.data?.machine_serial ?? "",
+    ],
+    queryFn: () =>
+      api.listAgentMemorySuggestions(
+        tenantId,
+        selectedTicket.data?.machine_station ?? "GENERIC_EVENT",
+        selectedTicket.data?.machine_serial ?? "",
+        5,
+      ),
+    enabled: Boolean(selectedTicket.data?.ticket_id) && (!enforceAuth || Boolean(accessToken)),
   });
 
   const emailHistory = useMemo(() => {
@@ -338,6 +393,9 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["tenant-email-history"] });
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-proactive-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-actions"] });
       setNotificationEmail("");
       setCreateForm({
         requesterName: "",
@@ -386,6 +444,61 @@ function App() {
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
+  const updateAutomationPolicyMutation = useMutation({
+    mutationFn: () =>
+      api.updateTenantAutomationPolicy(tenantId, {
+        correlation_window_minutes: Number(
+          automationWindow || tenantAutomationPolicy.data?.correlation_window_minutes || 1440,
+        ),
+        at_risk_lead_minutes: Number(
+          automationAtRiskLead || tenantAutomationPolicy.data?.at_risk_lead_minutes || 60,
+        ),
+        auto_assign_name: (automationAssignName || tenantAutomationPolicy.data?.auto_assign_name || "").trim(),
+        auto_assign_email: (automationAssignEmail || tenantAutomationPolicy.data?.auto_assign_email || "").trim() || null,
+        action_webhook_url: (automationWebhookUrl || tenantAutomationPolicy.data?.action_webhook_url || "").trim(),
+        action_webhook_token: (automationWebhookToken || "").trim(),
+      }),
+    onSuccess: () => {
+      setAdminError("");
+      queryClient.invalidateQueries({ queryKey: ["tenant-automation-policy"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-logs"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const runSlaMonitorMutation = useMutation({
+    mutationFn: () => api.runSlaMonitor(tenantId, 500),
+    onSuccess: (result) => {
+      setAdminError("");
+      setSlaMonitorResult(
+        `Scanned ${result.scanned} | AT_RISK ${result.at_risk_alerted} | BREACHED ${result.breached_alerted}`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-proactive-summary"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const memoryFeedbackMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedTicket.data) throw new ApiError("Select a ticket first", 422);
+      return api.addAgentMemoryFeedback({
+        tenant_id: selectedTicket.data.tenant_id,
+        ticket_id: selectedTicket.data.ticket_id,
+        event_type: selectedTicket.data.machine_station || "GENERIC_EVENT",
+        asset_id: selectedTicket.data.machine_serial || "",
+        outcome_score: Number(memoryScore),
+        resolution_note: memoryNote.trim(),
+      });
+    },
+    onSuccess: () => {
+      setAgentError("");
+      setMemoryNote("");
+      queryClient.invalidateQueries({ queryKey: ["agent-memory-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-decisions"] });
+    },
+    onError: (error) => setAgentError(getErrorMessage(error)),
+  });
 
   const createAdminUserMutation = useMutation({
     mutationFn: () =>
@@ -431,7 +544,7 @@ function App() {
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
 
-  function openAdminSection(section: "users" | "routing" | "sla" | "audit" | "technical") {
+  function openAdminSection(section: "users" | "routing" | "sla" | "automation" | "audit" | "technical") {
     setActiveView("admin");
     setAdminSection(section);
     setRouteEmailsDraft((tenantRoute.data?.to_emails ?? []).join(", "));
@@ -439,6 +552,13 @@ function App() {
     setSlaP2(String(tenantSlaPolicy.data?.p2_minutes ?? 240));
     setSlaP3(String(tenantSlaPolicy.data?.p3_minutes ?? 480));
     setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
+    setAutomationWindow(String(tenantAutomationPolicy.data?.correlation_window_minutes ?? 1440));
+    setAutomationAtRiskLead(String(tenantAutomationPolicy.data?.at_risk_lead_minutes ?? 60));
+    setAutomationAssignName(tenantAutomationPolicy.data?.auto_assign_name ?? "");
+    setAutomationAssignEmail(tenantAutomationPolicy.data?.auto_assign_email ?? "");
+    setAutomationWebhookUrl(tenantAutomationPolicy.data?.action_webhook_url ?? "");
+    setAutomationWebhookToken("");
+    setSlaMonitorResult("");
     setAdminError("");
   }
 
@@ -499,16 +619,16 @@ function App() {
   const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize);
   const viewTitle =
     resolvedView === "operations"
-      ? "Operations Center"
+      ? "Centro Operativo"
       : resolvedView === "kpi"
-        ? "KPI Dashboard"
-        : "Admin Workspace";
+        ? "Performance"
+        : "Amministrazione";
   const viewSubtitle =
     resolvedView === "operations"
-      ? "Gestisci ticket, assegnazioni e avanzamento operativo in tempo reale."
+      ? "Gestisci ticket e priorita in un flusso unico, rapido e chiaro."
       : resolvedView === "kpi"
-        ? "Monitora volumi, performance e priorita per decisioni rapide."
-        : "Configura governance, utenti e policy tenant in modo ordinato.";
+        ? "Controlla carico, rischi SLA e velocita di risoluzione."
+        : "Configura utenti, regole e automazioni del tenant.";
 
   function handleLogout() {
     clearAuth();
@@ -519,14 +639,14 @@ function App() {
   return (
     <div className="page-shell">
       <header className="topbar">
-        <div>
+        <div className="topbar-main">
           <h1>TechOps Copilot Console</h1>
-          <p className="subtitle">Ticketing operations with automation visibility</p>
+          <p className="subtitle">AI Agent per ticketing automatico, escalation SLA e controllo operativo.</p>
         </div>
         <div className="status-grid">
           {activeUser && (
             <div className="status-chip">
-              User: {activeUser.email} ({activeUser.role})
+              Utente: {activeUser.full_name || activeUser.email} ({activeUser.role})
             </div>
           )}
           {enforceAuth && accessToken && (
@@ -545,8 +665,8 @@ function App() {
 
       {isAuthMissing ? (
         <section className="card login-card">
-          <h2>Sign In</h2>
-          <p className="subtitle">Demo users: admin/operator/viewer @ example.com</p>
+          <h2>Accedi</h2>
+          <p className="subtitle">Utenti demo: admin/operator/viewer @ example.com</p>
           <div className="create-form">
             <label className="full-row">
               Email
@@ -566,7 +686,7 @@ function App() {
                 onClick={() => loginMutation.mutate({ email: loginEmail.trim(), password: loginPassword })}
                 disabled={loginMutation.isPending}
               >
-                {loginMutation.isPending ? "Signing in..." : "Sign In"}
+                {loginMutation.isPending ? "Accesso..." : "Accedi"}
               </button>
               {loginError && <p className="error">{loginError}</p>}
             </div>
@@ -579,20 +699,20 @@ function App() {
           className={resolvedView === "operations" ? "view-button active" : "view-button"}
           onClick={() => setActiveView("operations")}
         >
-          Operations
+          Operazioni
         </button>
         <button
           className={resolvedView === "kpi" ? "view-button active" : "view-button"}
           onClick={() => setActiveView("kpi")}
         >
-          KPI Dashboard
+          Performance
         </button>
         {isAdminUser && (
           <button
             className={resolvedView === "admin" ? "view-button active" : "view-button"}
             onClick={() => openAdminSection(adminSection)}
           >
-            Admin Workspace
+            Admin
           </button>
         )}
       </section>
@@ -603,9 +723,28 @@ function App() {
 
       {resolvedView !== "admin" && (
       <>
+      <section className="quick-strip">
+        <article className="card quick-card">
+          <span>Ticket aperti</span>
+          <strong>{queueSummary.data?.open_total ?? "-"}</strong>
+        </article>
+        <article className="card quick-card">
+          <span>Previsione breach 2h</span>
+          <strong>{agentProactiveSummary.data?.predicted_breach_2h ?? "-"}</strong>
+        </article>
+        <article className="card quick-card">
+          <span>A rischio SLA</span>
+          <strong>{queueSummary.data?.at_risk_total ?? "-"}</strong>
+        </article>
+        <article className="card quick-card">
+          <span>Risoluzione media</span>
+          <strong>{ticketMetrics.data?.avg_resolution_minutes ?? "-"} min</strong>
+        </article>
+      </section>
+
       <section className="control-panel">
         <label>
-          Tenant
+          Cliente (tenant)
           <input
             value={tenantId}
             onChange={(e) => {
@@ -616,7 +755,7 @@ function App() {
           />
         </label>
         <label>
-          Status
+          Stato ticket
           <select
             value={statusFilter}
             onChange={(e) => {
@@ -633,7 +772,7 @@ function App() {
           </select>
         </label>
         <label>
-          Queue
+          Coda
           <select
             value={queueMode}
             onChange={(e) => {
@@ -649,29 +788,29 @@ function App() {
           </select>
         </label>
         <label>
-          My Assignee Email
+          Email operatore
           <input
             value={myAssigneeEmail}
             onChange={(e) => {
               setMyAssigneeEmail(e.target.value);
               setCurrentPage(1);
             }}
-            placeholder="For MY queue"
+            placeholder="Usata per la coda MY_TICKETS"
           />
         </label>
         <label>
-          Search
+          Cerca
           <input
             value={searchText}
             onChange={(e) => {
               setSearchText(e.target.value);
               setCurrentPage(1);
             }}
-            placeholder="ID, subject, requester"
+            placeholder="ID, oggetto, richiedente"
           />
         </label>
         <label>
-          Page Size
+          Ticket per pagina
           <select
             value={String(pageSize)}
             onChange={(e) => {
@@ -686,7 +825,7 @@ function App() {
           </select>
         </label>
         <label>
-          Actions
+          Azioni
           <button
             className="secondary-button"
             onClick={() => {
@@ -700,29 +839,22 @@ function App() {
         </label>
       </section>
 
-      <section className="kpi-cards">
-        <article className="card kpi-card"><h3>Open Queue</h3><strong>{queueSummary.data?.open_total ?? "-"}</strong></article>
-        <article className="card kpi-card"><h3>At Risk</h3><strong>{queueSummary.data?.at_risk_total ?? "-"}</strong></article>
-        <article className="card kpi-card"><h3>Breached</h3><strong>{queueSummary.data?.breached_total ?? "-"}</strong></article>
-        <article className="card kpi-card"><h3>Avg Resolve (min)</h3><strong>{ticketMetrics.data?.avg_resolution_minutes ?? "-"}</strong></article>
-      </section>
-
       {resolvedView === "operations" && (
       <main className="content-grid">
         <section className="card create-card">
-          <h2>Create Ticket</h2>
+          <h2>Nuovo Ticket</h2>
           <form className="create-form" onSubmit={submitCreateTicket}>
             <label className="full-row">
-              Notification Email (destinatario notifica)
+              Email destinatario notifica
               <input
                 type="email"
                 list="notification-email-history"
                 value={notificationEmail || (tenantRoute.data?.to_emails?.[0] ?? "")}
                 onChange={(e) => setNotificationEmail(e.target.value)}
-                placeholder="Select or type destination email"
+                placeholder="Seleziona o inserisci una email"
               />
               <small className="hint">
-                Questa email riceve la notifica. Il campo Requester Email identifica chi apre il ticket.
+                Questa email riceve la notifica; il richiedente resta separato.
               </small>
               <datalist id="notification-email-history">
                 {emailHistory.map((email) => (
@@ -731,7 +863,7 @@ function App() {
               </datalist>
             </label>
             <label>
-              Requester Name
+              Nome richiedente
               <input
                 value={createForm.requesterName}
                 onChange={(e) =>
@@ -740,7 +872,7 @@ function App() {
               />
             </label>
             <label>
-              Requester Email (autore ticket)
+              Email richiedente
               <input
                 type="email"
                 value={createForm.requesterEmail}
@@ -750,14 +882,14 @@ function App() {
               />
             </label>
             <label>
-              Subject
+              Oggetto
               <input
                 value={createForm.subject}
                 onChange={(e) => setCreateForm((prev) => ({ ...prev, subject: e.target.value }))}
               />
             </label>
             <label>
-              Priority
+              Priorita
               <select
                 value={createForm.priority}
                 onChange={(e) =>
@@ -771,7 +903,7 @@ function App() {
               </select>
             </label>
             <label className="full-row">
-              Description
+              Descrizione
               <textarea
                 rows={3}
                 value={createForm.descriptionRaw}
@@ -780,36 +912,49 @@ function App() {
                 }
               />
             </label>
-            <label>
-              Machine Line
-              <input
-                value={createForm.machineLine}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, machineLine: e.target.value }))
-                }
-              />
-            </label>
-            <label>
-              Machine Station
-              <input
-                value={createForm.machineStation}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, machineStation: e.target.value }))
-                }
-              />
-            </label>
-            <label>
-              Machine Serial
-              <input
-                value={createForm.machineSerial}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, machineSerial: e.target.value }))
-                }
-              />
-            </label>
+            <div className="full-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowAdvancedCreate((prev) => !prev)}
+              >
+                {showAdvancedCreate ? "Nascondi campi tecnici" : "Mostra campi tecnici"}
+              </button>
+            </div>
+            {showAdvancedCreate && (
+              <>
+                <label>
+                  Linea impianto
+                  <input
+                    value={createForm.machineLine}
+                    onChange={(e) =>
+                      setCreateForm((prev) => ({ ...prev, machineLine: e.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Stazione
+                  <input
+                    value={createForm.machineStation}
+                    onChange={(e) =>
+                      setCreateForm((prev) => ({ ...prev, machineStation: e.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Seriale macchina
+                  <input
+                    value={createForm.machineSerial}
+                    onChange={(e) =>
+                      setCreateForm((prev) => ({ ...prev, machineSerial: e.target.value }))
+                    }
+                  />
+                </label>
+              </>
+            )}
             <div className="create-actions full-row">
               <button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? "Creating..." : "Create Ticket"}
+                {createMutation.isPending ? "Creazione..." : "Crea Ticket"}
               </button>
               {createError && <p className="error">{createError}</p>}
             </div>
@@ -818,27 +963,27 @@ function App() {
 
         <section className="card list-card">
           <div className="list-head">
-            <h2>Ticket Inbox</h2>
+            <h2>Inbox Ticket</h2>
             <div className="kpi-row">
-              <span>Open: {openCount}</span>
-              <span>Closed: {closedCount}</span>
-              <span>Total: {rows.length}</span>
-              <span>Filtered: {totalRecords}</span>
+              <span>Aperti: {openCount}</span>
+              <span>Chiusi: {closedCount}</span>
+              <span>Totali: {rows.length}</span>
+              <span>Filtrati: {totalRecords}</span>
             </div>
           </div>
-          {tickets.isLoading && <p>Loading tickets...</p>}
+          {tickets.isLoading && <p>Caricamento ticket...</p>}
           {tickets.isError && <p className="error">{getErrorMessage(tickets.error)}</p>}
           {!tickets.isLoading && !tickets.isError && (
             <table>
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Priority</th>
-                  <th>Status</th>
+                  <th>Priorita</th>
+                  <th>Stato</th>
                   <th>SLA</th>
-                  <th>Assignee</th>
-                  <th>Subject</th>
-                  <th>Created</th>
+                  <th>Assegnato</th>
+                  <th>Oggetto</th>
+                  <th>Creato</th>
                 </tr>
               </thead>
               <tbody>
@@ -867,67 +1012,67 @@ function App() {
                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 disabled={page <= 1}
               >
-                Prev
+                Indietro
               </button>
               <span>
-                Page {page} / {totalPages}
+                Pagina {page} / {totalPages}
               </span>
               <button
                 className="secondary-button"
                 onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                 disabled={page >= totalPages}
               >
-                Next
+                Avanti
               </button>
             </div>
           )}
         </section>
 
         <section className="card detail-card">
-          <h2>Ticket Detail</h2>
-          {!selectedTicketId && <p>Select a ticket from the inbox.</p>}
+          <h2>Dettaglio Ticket</h2>
+          {!selectedTicketId && <p>Seleziona un ticket dalla inbox per vedere dettagli e timeline.</p>}
           {selectedTicket.isError && <p className="error">{getErrorMessage(selectedTicket.error)}</p>}
           {selectedTicket.data && (
             <>
               <div className="detail-head">
                 <div>
-                  <strong>{selectedTicket.data.ticket_id}</strong>
+                  <strong>#{selectedTicket.data.ticket_id}</strong>
                   <p>{selectedTicket.data.subject}</p>
                 </div>
                 <button
                   disabled={selectedTicket.data.status === "CLOSED" || closeMutation.isPending}
                   onClick={() => closeMutation.mutate(selectedTicket.data.ticket_id)}
                 >
-                  {selectedTicket.data.status === "CLOSED" ? "Closed" : "Close Ticket"}
+                  {selectedTicket.data.status === "CLOSED" ? "Ticket chiuso" : "Chiudi ticket"}
                 </button>
               </div>
               <div className="detail-meta">
-                <p>Tenant: {selectedTicket.data.tenant_id}</p>
-                <p>Status: {selectedTicket.data.status}</p>
-                <p>Requester: {selectedTicket.data.requester_name}</p>
+                <p>Cliente: {selectedTicket.data.tenant_id}</p>
+                <p>Stato: {selectedTicket.data.status}</p>
+                <p>Richiedente: {selectedTicket.data.requester_name}</p>
                 <p>Email: {selectedTicket.data.requester_email}</p>
                 <p>
-                  Assignee: {selectedTicket.data.assignee_name || "-"} /{" "}
+                  Assegnato a: {selectedTicket.data.assignee_name || "-"} /{" "}
                   {selectedTicket.data.assignee_email || "-"}
                 </p>
-                <p>SLA Due: {selectedTicket.data.sla_due_at ? formatDate(selectedTicket.data.sla_due_at) : "-"}</p>
-                <p>SLA State: {selectedTicket.data.sla_state}</p>
+                <p>Scadenza SLA: {selectedTicket.data.sla_due_at ? formatDate(selectedTicket.data.sla_due_at) : "-"}</p>
+                <p>Stato SLA: {selectedTicket.data.sla_state}</p>
                 <p>
-                  Machine: {selectedTicket.data.machine_line}/{selectedTicket.data.machine_station}/
+                  Macchina: {selectedTicket.data.machine_line}/{selectedTicket.data.machine_station}/
                   {selectedTicket.data.machine_serial}
                 </p>
               </div>
               <div className="detail-actions">
-                <h3>Assignment</h3>
+                <h3>Assegnazione</h3>
                 <div className="inline-form">
                   <input
-                    placeholder="Assignee name"
+                    placeholder="Nome operatore"
                     value={assigneeName}
                     onChange={(e) => setAssigneeName(e.target.value)}
                   />
                   <input
                     type="email"
-                    placeholder="Assignee email"
+                    placeholder="Email operatore"
                     value={assigneeEmail}
                     onChange={(e) => setAssigneeEmail(e.target.value)}
                   />
@@ -941,11 +1086,11 @@ function App() {
                     }
                     disabled={assignMutation.isPending}
                   >
-                    {assignMutation.isPending ? "Saving..." : "Assign"}
+                    {assignMutation.isPending ? "Salvataggio..." : "Assegna"}
                   </button>
                 </div>
                 {assignError && <p className="error">{assignError}</p>}
-                <h3>Status</h3>
+                <h3>Stato</h3>
                 <div className="inline-form">
                   <select
                     value={nextStatus}
@@ -966,14 +1111,14 @@ function App() {
                     }
                     disabled={statusMutation.isPending}
                   >
-                    {statusMutation.isPending ? "Updating..." : "Update Status"}
+                    {statusMutation.isPending ? "Aggiornamento..." : "Aggiorna stato"}
                   </button>
                 </div>
                 {statusError && <p className="error">{statusError}</p>}
-                <h3>Add Note</h3>
+                <h3>Nota operativa</h3>
                 <div className="inline-form">
                   <input
-                    placeholder="Write operational note"
+                    placeholder="Scrivi una nota"
                     value={noteText}
                     onChange={(e) => setNoteText(e.target.value)}
                   />
@@ -986,13 +1131,13 @@ function App() {
                     }
                     disabled={noteMutation.isPending || !noteText.trim()}
                   >
-                    {noteMutation.isPending ? "Saving..." : "Add Note"}
+                    {noteMutation.isPending ? "Salvataggio..." : "Aggiungi nota"}
                   </button>
                 </div>
                 {noteError && <p className="error">{noteError}</p>}
               </div>
               <h3>Timeline</h3>
-              {selectedEvents.isLoading && <p>Loading timeline...</p>}
+              {selectedEvents.isLoading && <p>Caricamento timeline...</p>}
               {selectedEvents.isError && <p className="error">{getErrorMessage(selectedEvents.error)}</p>}
               <ul className="timeline">
                 {(selectedEvents.data ?? []).map((event) => (
@@ -1005,6 +1150,47 @@ function App() {
                   </li>
                 ))}
               </ul>
+              <h3>AI Memory Feedback</h3>
+              <div className="inline-form">
+                <select value={memoryScore} onChange={(e) => setMemoryScore(e.target.value)}>
+                  <option value="5">5 - Ottimo esito</option>
+                  <option value="4">4 - Buon esito</option>
+                  <option value="3">3 - Medio</option>
+                  <option value="2">2 - Scarso</option>
+                  <option value="1">1 - Non utile</option>
+                </select>
+                <input
+                  placeholder="Nota di risoluzione da ricordare"
+                  value={memoryNote}
+                  onChange={(e) => setMemoryNote(e.target.value)}
+                />
+                <button
+                  onClick={() => {
+                    if (!memoryNote.trim()) {
+                      setAgentError("Inserisci una nota prima di salvare il feedback AI.");
+                      return;
+                    }
+                    memoryFeedbackMutation.mutate();
+                  }}
+                  disabled={memoryFeedbackMutation.isPending}
+                >
+                  {memoryFeedbackMutation.isPending ? "Salvataggio..." : "Salva memoria"}
+                </button>
+              </div>
+              {agentError && <p className="error">{agentError}</p>}
+              {!!agentMemorySuggestions.data?.length && (
+                <ul className="timeline">
+                  {agentMemorySuggestions.data.map((item: AgentMemorySuggestion) => (
+                    <li key={`${item.ticket_id}-${item.created_at}`}>
+                      <div>
+                        <strong>{item.ticket_id}</strong>
+                        <span>score {item.outcome_score}</span>
+                      </div>
+                      <p>{item.resolution_note || "-"}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           )}
         </section>
@@ -1014,8 +1200,8 @@ function App() {
       {resolvedView === "kpi" && (
         <div className="analytics-stack">
           <section className="card analytics-card">
-            <h2>Operational KPI Dashboard</h2>
-            <p className="subtitle">Vista sintetica delle metriche operative del tenant selezionato.</p>
+            <h2>Dashboard Performance</h2>
+            <p className="subtitle">Panoramica veloce delle performance operative del cliente selezionato.</p>
             <div className="analytics-grid">
               <div><span>Created last 24h</span><strong>{ticketMetrics.data?.created_last_24h ?? "-"}</strong></div>
               <div><span>Closed last 24h</span><strong>{ticketMetrics.data?.closed_last_24h ?? "-"}</strong></div>
@@ -1028,9 +1214,68 @@ function App() {
             </div>
           </section>
           <section className="card automation-card">
-            <h3>AI Agent External Triggers</h3>
-            <p className="subtitle">Endpoint per eventi da WMS/PLC/IoT: creazione e correlazione ticket automatica.</p>
-            <code>POST {baseUrl}/automation/external-intake</code>
+            <h3>Automazione AI attiva</h3>
+            <p className="subtitle">
+              I trigger esterni (WMS/PLC/IoT) creano o correlano ticket in automatico con policy tenant dedicate.
+            </p>
+          </section>
+          <section className="card automation-card">
+            <h3>Next Best Actions</h3>
+            {agentProactiveSummary.isLoading && <p>Calcolo azioni proattive...</p>}
+            {agentProactiveSummary.isError && <p className="error">{getErrorMessage(agentProactiveSummary.error)}</p>}
+            {!agentProactiveSummary.isLoading && !agentProactiveSummary.isError && (
+              <ul className="timeline">
+                {(agentProactiveSummary.data?.next_best_actions ?? []).slice(0, 6).map((item) => (
+                  <li key={item.ticket_id}>
+                    <div>
+                      <strong>{item.ticket_id}</strong>
+                      <span>{item.sla_state}</span>
+                    </div>
+                    <p>{item.recommendation}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <section className="card automation-card">
+            <h3>Decisioni AI recenti</h3>
+            {agentDecisionLogs.isLoading && <p>Caricamento decisioni...</p>}
+            {agentDecisionLogs.isError && <p className="error">{getErrorMessage(agentDecisionLogs.error)}</p>}
+            {!agentDecisionLogs.isLoading && !agentDecisionLogs.isError && (
+              <table>
+                <thead><tr><th>Ticket</th><th>Decisione</th><th>Confidenza</th><th>Motivo</th></tr></thead>
+                <tbody>
+                  {(agentDecisionLogs.data ?? []).slice(0, 8).map((row: AgentDecisionLog) => (
+                    <tr key={row.id}>
+                      <td>{row.ticket_id}</td>
+                      <td>{row.decision}</td>
+                      <td>{row.confidence}</td>
+                      <td>{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+          <section className="card automation-card">
+            <h3>Action Execution Log</h3>
+            {agentActionRuns.isLoading && <p>Caricamento action log...</p>}
+            {agentActionRuns.isError && <p className="error">{getErrorMessage(agentActionRuns.error)}</p>}
+            {!agentActionRuns.isLoading && !agentActionRuns.isError && (
+              <table>
+                <thead><tr><th>Ticket</th><th>Action</th><th>Status</th><th>Dettaglio</th></tr></thead>
+                <tbody>
+                  {(agentActionRuns.data ?? []).slice(0, 8).map((row: AgentActionRun) => (
+                    <tr key={row.id}>
+                      <td>{row.ticket_id}</td>
+                      <td>{row.action_name}</td>
+                      <td>{row.status}</td>
+                      <td>{row.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </section>
         </div>
       )}
@@ -1041,61 +1286,77 @@ function App() {
         <section className="card admin-panel">
           <div className="admin-head">
             <div>
-              <h2>Admin Workspace</h2>
-              <p className="subtitle">Ogni sezione e separata per ridurre errore operativo e confusione.</p>
+              <h2>Pannello Amministrazione</h2>
+              <p className="subtitle">Sezioni separate e linguaggio chiaro per ridurre errore operativo.</p>
             </div>
             <div className="admin-nav">
-              <button className={adminSection === "users" ? "view-button active" : "view-button"} onClick={() => setAdminSection("users")}>Users</button>
+              <button className={adminSection === "users" ? "view-button active" : "view-button"} onClick={() => setAdminSection("users")}>Utenti</button>
               <button className={adminSection === "routing" ? "view-button active" : "view-button"} onClick={() => setAdminSection("routing")}>Routing</button>
               <button className={adminSection === "sla" ? "view-button active" : "view-button"} onClick={() => setAdminSection("sla")}>SLA</button>
+              <button className={adminSection === "automation" ? "view-button active" : "view-button"} onClick={() => setAdminSection("automation")}>Automation</button>
               <button className={adminSection === "audit" ? "view-button active" : "view-button"} onClick={() => setAdminSection("audit")}>Audit</button>
-              <button className={adminSection === "technical" ? "view-button active" : "view-button"} onClick={() => setAdminSection("technical")}>Technical</button>
+              <button className={adminSection === "technical" ? "view-button active" : "view-button"} onClick={() => setAdminSection("technical")}>Tecnico</button>
             </div>
           </div>
 
           <div className="admin-settings-grid">
             {adminSection === "technical" && (
-              <div className="control-panel tech-panel">
-                <label>
-                  API Base URL
-                  <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-                </label>
-                <label>
-                  API Key
-                  <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optional unless API auth enabled" />
-                </label>
-                <label>
-                  Intake Mode
-                  <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
-                    <option value="webhook">webhook (recommended)</option>
-                    <option value="api">api (/intake direct)</option>
-                  </select>
-                </label>
-                <label>
-                  Webhook URL
-                  <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
-                </label>
-                {!enforceAuth && (
-                  <label>
-                    User Role
-                    <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
-                      <option value="admin">admin</option>
-                      <option value="operator">operator</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                  </label>
+              <div className="admin-section">
+                <h3>Integrazioni tecniche</h3>
+                <p className="subtitle">Questa area e pensata per setup iniziale o supporto tecnico.</p>
+                <div className="create-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setShowTechnicalPanel((prev) => !prev)}
+                  >
+                    {showTechnicalPanel ? "Nascondi impostazioni tecniche" : "Mostra impostazioni tecniche"}
+                  </button>
+                </div>
+                {showTechnicalPanel && (
+                  <div className="control-panel tech-panel">
+                    <label>
+                      API Base URL
+                      <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                    </label>
+                    <label>
+                      API Key
+                      <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Opzionale se auth API disattivata" />
+                    </label>
+                    <label>
+                      Modalita ingresso ticket
+                      <select value={intakeMode} onChange={(e) => setIntakeMode(e.target.value)}>
+                        <option value="webhook">webhook (consigliata)</option>
+                        <option value="api">api diretta</option>
+                      </select>
+                    </label>
+                    <label>
+                      Webhook URL
+                      <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} />
+                    </label>
+                    {!enforceAuth && (
+                      <label>
+                        Ruolo simulato
+                        <select value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+                          <option value="admin">admin</option>
+                          <option value="operator">operator</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+                      </label>
+                    )}
+                  </div>
                 )}
               </div>
             )}
 
             {adminSection === "routing" && (
               <div className="admin-section">
-                <h3>Tenant Notification Routing</h3>
-                <p className="subtitle">Define default recipients for notifications.</p>
+                <h3>Instradamento notifiche</h3>
+                <p className="subtitle">Imposta i destinatari predefiniti delle notifiche ticket.</p>
                 <div className="inline-form">
                   <input value={routeEmailsDraft} onChange={(e) => setRouteEmailsDraft(e.target.value)} placeholder="mail1@company.com, mail2@company.com" />
                   <button onClick={() => updateRouteMutation.mutate(routeEmailsDraft)} disabled={updateRouteMutation.isPending}>
-                    {updateRouteMutation.isPending ? "Saving..." : "Save Routing"}
+                    {updateRouteMutation.isPending ? "Salvataggio..." : "Salva routing"}
                   </button>
                 </div>
               </div>
@@ -1103,34 +1364,108 @@ function App() {
 
             {adminSection === "sla" && (
               <div className="admin-section">
-                <h3>Tenant SLA Policy (minutes)</h3>
+                <h3>Policy SLA (minuti)</h3>
                 <div className="inline-form">
                   <input value={slaP1} onChange={(e) => setSlaP1(e.target.value)} placeholder="P1" />
                   <input value={slaP2} onChange={(e) => setSlaP2(e.target.value)} placeholder="P2" />
                   <input value={slaP3} onChange={(e) => setSlaP3(e.target.value)} placeholder="P3" />
                   <input value={slaP4} onChange={(e) => setSlaP4(e.target.value)} placeholder="P4" />
                   <button onClick={() => updateSlaMutation.mutate()} disabled={updateSlaMutation.isPending}>
-                    {updateSlaMutation.isPending ? "Saving..." : "Save SLA"}
+                    {updateSlaMutation.isPending ? "Salvataggio..." : "Salva SLA"}
                   </button>
+                </div>
+              </div>
+            )}
+
+            {adminSection === "automation" && (
+              <div className="admin-section">
+                <h3>Policy Automazione</h3>
+                <p className="subtitle">Configura correlazione, alert SLA e assegnazione automatica.</p>
+                <div className="create-form">
+                  <label>
+                    Finestra correlazione (minuti)
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={automationWindow}
+                      onChange={(e) => setAutomationWindow(e.target.value)}
+                      placeholder="1440"
+                    />
+                  </label>
+                  <label>
+                    Anticipo alert AT_RISK (minuti)
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={automationAtRiskLead}
+                      onChange={(e) => setAutomationAtRiskLead(e.target.value)}
+                      placeholder="60"
+                    />
+                  </label>
+                  <label>
+                    Nome assegnazione automatica
+                    <input
+                      value={automationAssignName}
+                      onChange={(e) => setAutomationAssignName(e.target.value)}
+                      placeholder="Automation Dispatcher"
+                    />
+                  </label>
+                  <label>
+                    Email assegnazione automatica
+                    <input
+                      type="email"
+                      value={automationAssignEmail}
+                      onChange={(e) => setAutomationAssignEmail(e.target.value)}
+                      placeholder="dispatch@company.com"
+                    />
+                  </label>
+                  <label className="full-row">
+                    Action Webhook URL
+                    <input
+                      value={automationWebhookUrl}
+                      onChange={(e) => setAutomationWebhookUrl(e.target.value)}
+                      placeholder="https://workflow.company.com/agent-actions"
+                    />
+                  </label>
+                  <label className="full-row">
+                    Action Webhook Token (opzionale)
+                    <input
+                      type="password"
+                      value={automationWebhookToken}
+                      onChange={(e) => setAutomationWebhookToken(e.target.value)}
+                      placeholder="Bearer token"
+                    />
+                  </label>
+                  <div className="create-actions">
+                    <button onClick={() => updateAutomationPolicyMutation.mutate()} disabled={updateAutomationPolicyMutation.isPending}>
+                      {updateAutomationPolicyMutation.isPending ? "Salvataggio..." : "Salva policy automazione"}
+                    </button>
+                    <button className="secondary-button" onClick={() => runSlaMonitorMutation.mutate()} disabled={runSlaMonitorMutation.isPending}>
+                      {runSlaMonitorMutation.isPending ? "Esecuzione..." : "Esegui monitor SLA"}
+                    </button>
+                  </div>
+                  {slaMonitorResult && <p className="subtitle">{slaMonitorResult}</p>}
                 </div>
               </div>
             )}
 
             {adminSection === "users" && (
               <div className="admin-section">
-                <h3>User Management</h3>
+                <h3>Gestione utenti</h3>
                 <div className="create-form">
                   <label>Email<input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} /></label>
-                  <label>Full Name<input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} /></label>
+                  <label>Nome completo<input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} /></label>
                   <label>
-                    Role
+                    Ruolo
                     <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as "admin" | "operator" | "viewer")}>
                       <option value="admin">admin</option><option value="operator">operator</option><option value="viewer">viewer</option>
                     </select>
                   </label>
                   <label>Password<input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} /></label>
                   <label>
-                    Active
+                    Attivo
                     <select value={newUserActive ? "true" : "false"} onChange={(e) => setNewUserActive(e.target.value === "true")}>
                       <option value="true">true</option><option value="false">false</option>
                     </select>
@@ -1147,31 +1482,31 @@ function App() {
                       }}
                       disabled={createAdminUserMutation.isPending}
                     >
-                      {createAdminUserMutation.isPending ? "Creating..." : "Create User"}
+                      {createAdminUserMutation.isPending ? "Creazione..." : "Crea utente"}
                     </button>
                   </div>
                 </div>
 
-                {adminUsers.isLoading && <p>Loading users...</p>}
+                {adminUsers.isLoading && <p>Caricamento utenti...</p>}
                 {adminUsers.isError && <p className="error">{getErrorMessage(adminUsers.error)}</p>}
                 {!adminUsers.isLoading && !adminUsers.isError && !adminUsers.data?.length && (
-                  <p className="subtitle">Nessun utente trovato per questo tenant.</p>
+                  <p className="subtitle">Nessun utente trovato per questo cliente.</p>
                 )}
                 {!!adminUsers.data?.length && (
                   <table className="admin-users-table">
-                    <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Active</th><th>Password Reset</th></tr></thead>
+                    <thead><tr><th>Email</th><th>Nome</th><th>Ruolo</th><th>Attivo</th><th>Reset password</th></tr></thead>
                     <tbody>
                       {adminUsers.data.map((user: AdminUser) => (
                         <tr key={user.id}>
                           <td>{user.email}</td><td>{user.full_name}</td><td>{user.role}</td>
                           <td>
                             <button className="secondary-button" onClick={() => toggleUserActiveMutation.mutate({ id: user.id, isActive: !user.is_active })} disabled={toggleUserActiveMutation.isPending}>
-                              {user.is_active ? "Disable" : "Enable"}
+                              {user.is_active ? "Disattiva" : "Attiva"}
                             </button>
                           </td>
                           <td>
                             <div className="inline-form">
-                              <input type="password" value={passwordDraftByUserId[user.id] ?? ""} placeholder="New password" onChange={(e) => setPasswordDraftByUserId((prev) => ({ ...prev, [user.id]: e.target.value }))} />
+                              <input type="password" value={passwordDraftByUserId[user.id] ?? ""} placeholder="Nuova password" onChange={(e) => setPasswordDraftByUserId((prev) => ({ ...prev, [user.id]: e.target.value }))} />
                               <button
                                 onClick={() => {
                                   const password = (passwordDraftByUserId[user.id] ?? "").trim();
@@ -1197,8 +1532,8 @@ function App() {
 
             {adminSection === "audit" && (
               <div className="admin-section">
-                <h3>Recent Admin Audit</h3>
-                {adminAuditLogs.isLoading && <p>Loading audit logs...</p>}
+                <h3>Audit amministrativo recente</h3>
+                {adminAuditLogs.isLoading && <p>Caricamento audit log...</p>}
                 {adminAuditLogs.isError && <p className="error">{getErrorMessage(adminAuditLogs.error)}</p>}
                 {!adminAuditLogs.isLoading && !adminAuditLogs.isError && !adminAuditLogs.data?.length && (
                   <p className="subtitle">Nessun evento audit disponibile.</p>

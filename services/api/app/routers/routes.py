@@ -49,6 +49,25 @@ class TenantSlaPolicyUpdate(BaseModel):
     p4_minutes: int = Field(ge=1, le=10080)
 
 
+class TenantAutomationPolicyOut(BaseModel):
+    tenant_id: str
+    correlation_window_minutes: int
+    at_risk_lead_minutes: int
+    auto_assign_name: str
+    auto_assign_email: Optional[EmailStr] = None
+    action_webhook_url: str
+    updated_at: datetime
+
+
+class TenantAutomationPolicyUpdate(BaseModel):
+    correlation_window_minutes: int = Field(ge=1, le=10080)
+    at_risk_lead_minutes: int = Field(ge=1, le=10080)
+    auto_assign_name: str = Field(default="", max_length=255)
+    auto_assign_email: Optional[EmailStr] = None
+    action_webhook_url: str = Field(default="", max_length=2048)
+    action_webhook_token: str = Field(default="", max_length=2048)
+
+
 def _csv_to_list(value: str) -> list[str]:
     if not value:
         return []
@@ -278,4 +297,103 @@ def update_tenant_sla_policy(
         p3_minutes=row[3],
         p4_minutes=row[4],
         updated_at=row[5],
+    )
+
+
+@router.get("/tenant-automation-policies/{tenant_id}", response_model=TenantAutomationPolicyOut)
+def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewer_role)):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
+            FROM tenant_automation_policies
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        row = cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tenant automation policy not found")
+    return TenantAutomationPolicyOut(
+        tenant_id=row[0],
+        correlation_window_minutes=row[1],
+        at_risk_lead_minutes=row[2],
+        auto_assign_name=row[3] or "",
+        auto_assign_email=row[4] or None,
+        action_webhook_url=row[5] or "",
+        updated_at=row[6],
+    )
+
+
+@router.patch("/tenant-automation-policies/{tenant_id}", response_model=TenantAutomationPolicyOut)
+def update_tenant_automation_policy(
+    tenant_id: str,
+    payload: TenantAutomationPolicyUpdate,
+    _: None = Depends(require_admin_role),
+    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    current_user=Depends(get_current_user),
+):
+    actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tenant_automation_policies (
+                      tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email,
+                      action_webhook_url, action_webhook_token
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                      correlation_window_minutes = EXCLUDED.correlation_window_minutes,
+                      at_risk_lead_minutes = EXCLUDED.at_risk_lead_minutes,
+                      auto_assign_name = EXCLUDED.auto_assign_name,
+                      auto_assign_email = EXCLUDED.auto_assign_email,
+                      action_webhook_url = EXCLUDED.action_webhook_url,
+                      action_webhook_token = EXCLUDED.action_webhook_token,
+                      updated_at = NOW()
+                    RETURNING tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
+                    """,
+                    (
+                        tenant_id,
+                        payload.correlation_window_minutes,
+                        payload.at_risk_lead_minutes,
+                        payload.auto_assign_name.strip(),
+                        str(payload.auto_assign_email).strip().lower() if payload.auto_assign_email else "",
+                        payload.action_webhook_url.strip(),
+                        payload.action_webhook_token.strip(),
+                    ),
+                )
+                row = cur.fetchone()
+                log_admin_action(
+                    conn,
+                    tenant_id=tenant_id,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    action="TENANT_AUTOMATION_POLICY_UPDATED",
+                    target_type="tenant_automation_policy",
+                    target_id=tenant_id,
+                    details={
+                        "correlation_window_minutes": row[1],
+                        "at_risk_lead_minutes": row[2],
+                        "auto_assign_name": row[3] or "",
+                        "auto_assign_email": row[4] or None,
+                        "action_webhook_url": row[5] or "",
+                    },
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return TenantAutomationPolicyOut(
+        tenant_id=row[0],
+        correlation_window_minutes=row[1],
+        at_risk_lead_minutes=row[2],
+        auto_assign_name=row[3] or "",
+        auto_assign_email=row[4] or None,
+        action_webhook_url=row[5] or "",
+        updated_at=row[6],
     )
