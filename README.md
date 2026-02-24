@@ -352,3 +352,7 @@ powershell -ExecutionPolicy Bypass -File scripts/simulate_logistics_trigger.ps1
 
 Guida completa all'utilizzo del prodotto:
 - `docs/MANUALE_UTENTE.md`
+- `docs/PRODUCTION_HARDENING.md`
+- `docs/BACKUP_RESTORE.md`
+- `docs/GO_TO_MARKET.md`
+- `CHANGELOG.md`
