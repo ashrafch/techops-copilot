@@ -54,6 +54,8 @@ class TenantAutomationPolicyOut(BaseModel):
     tenant_id: str
     correlation_window_minutes: int
     at_risk_lead_minutes: int
+    human_review_threshold: float
+    auto_execute_threshold: float
     auto_assign_name: str
     auto_assign_email: Optional[EmailStr] = None
     action_webhook_url: str
@@ -63,6 +65,8 @@ class TenantAutomationPolicyOut(BaseModel):
 class TenantAutomationPolicyUpdate(BaseModel):
     correlation_window_minutes: int = Field(ge=1, le=10080)
     at_risk_lead_minutes: int = Field(ge=1, le=10080)
+    human_review_threshold: float = Field(default=0.75, ge=0.5, le=0.99)
+    auto_execute_threshold: float = Field(default=0.85, ge=0.5, le=0.99)
     auto_assign_name: str = Field(default="", max_length=255)
     auto_assign_email: Optional[EmailStr] = None
     action_webhook_url: str = Field(default="", max_length=2048)
@@ -313,7 +317,8 @@ def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewe
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
+            SELECT tenant_id, correlation_window_minutes, at_risk_lead_minutes, human_review_threshold, auto_execute_threshold,
+                   auto_assign_name, auto_assign_email, action_webhook_url, updated_at
             FROM tenant_automation_policies
             WHERE tenant_id = %s
             """,
@@ -327,10 +332,12 @@ def get_tenant_automation_policy(tenant_id: str, _: None = Depends(require_viewe
         tenant_id=row[0],
         correlation_window_minutes=row[1],
         at_risk_lead_minutes=row[2],
-        auto_assign_name=row[3] or "",
-        auto_assign_email=row[4] or None,
-        action_webhook_url=row[5] or "",
-        updated_at=row[6],
+        human_review_threshold=float(row[3]),
+        auto_execute_threshold=float(row[4]),
+        auto_assign_name=row[5] or "",
+        auto_assign_email=row[6] or None,
+        action_webhook_url=row[7] or "",
+        updated_at=row[8],
     )
 
 
@@ -343,6 +350,8 @@ def update_tenant_automation_policy(
     current_user=Depends(get_current_user),
 ):
     enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    if payload.human_review_threshold > payload.auto_execute_threshold:
+        raise HTTPException(status_code=422, detail="human_review_threshold must be <= auto_execute_threshold")
     actor_email, actor_role = resolve_actor(x_user_role=x_user_role, current_user=current_user)
     with get_conn() as conn:
         conn.autocommit = False
@@ -351,24 +360,30 @@ def update_tenant_automation_policy(
                 cur.execute(
                     """
                     INSERT INTO tenant_automation_policies (
-                      tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email,
+                      tenant_id, correlation_window_minutes, at_risk_lead_minutes, human_review_threshold, auto_execute_threshold,
+                      auto_assign_name, auto_assign_email,
                       action_webhook_url, action_webhook_token
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (tenant_id) DO UPDATE SET
                       correlation_window_minutes = EXCLUDED.correlation_window_minutes,
                       at_risk_lead_minutes = EXCLUDED.at_risk_lead_minutes,
+                      human_review_threshold = EXCLUDED.human_review_threshold,
+                      auto_execute_threshold = EXCLUDED.auto_execute_threshold,
                       auto_assign_name = EXCLUDED.auto_assign_name,
                       auto_assign_email = EXCLUDED.auto_assign_email,
                       action_webhook_url = EXCLUDED.action_webhook_url,
                       action_webhook_token = EXCLUDED.action_webhook_token,
                       updated_at = NOW()
-                    RETURNING tenant_id, correlation_window_minutes, at_risk_lead_minutes, auto_assign_name, auto_assign_email, action_webhook_url, updated_at
+                    RETURNING tenant_id, correlation_window_minutes, at_risk_lead_minutes, human_review_threshold, auto_execute_threshold,
+                              auto_assign_name, auto_assign_email, action_webhook_url, updated_at
                     """,
                     (
                         tenant_id,
                         payload.correlation_window_minutes,
                         payload.at_risk_lead_minutes,
+                        payload.human_review_threshold,
+                        payload.auto_execute_threshold,
                         payload.auto_assign_name.strip(),
                         str(payload.auto_assign_email).strip().lower() if payload.auto_assign_email else "",
                         payload.action_webhook_url.strip(),
@@ -387,9 +402,11 @@ def update_tenant_automation_policy(
                     details={
                         "correlation_window_minutes": row[1],
                         "at_risk_lead_minutes": row[2],
-                        "auto_assign_name": row[3] or "",
-                        "auto_assign_email": row[4] or None,
-                        "action_webhook_url": row[5] or "",
+                        "human_review_threshold": float(row[3]),
+                        "auto_execute_threshold": float(row[4]),
+                        "auto_assign_name": row[5] or "",
+                        "auto_assign_email": row[6] or None,
+                        "action_webhook_url": row[7] or "",
                     },
                 )
             conn.commit()
@@ -401,8 +418,10 @@ def update_tenant_automation_policy(
         tenant_id=row[0],
         correlation_window_minutes=row[1],
         at_risk_lead_minutes=row[2],
-        auto_assign_name=row[3] or "",
-        auto_assign_email=row[4] or None,
-        action_webhook_url=row[5] or "",
-        updated_at=row[6],
+        human_review_threshold=float(row[3]),
+        auto_execute_threshold=float(row[4]),
+        auto_assign_name=row[5] or "",
+        auto_assign_email=row[6] or None,
+        action_webhook_url=row[7] or "",
+        updated_at=row[8],
     )

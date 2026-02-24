@@ -6,6 +6,8 @@ import {
   type AgentActionRun,
   type AgentDecisionLog,
   type AgentMemorySuggestion,
+  type AgentPendingDecision,
+  type AgentPlaybook,
   type AdminAuditLog,
   type AdminUser,
   type IntakeRequest,
@@ -122,10 +124,19 @@ function App() {
   const [slaP4, setSlaP4] = useState("");
   const [automationWindow, setAutomationWindow] = useState("");
   const [automationAtRiskLead, setAutomationAtRiskLead] = useState("");
+  const [automationHumanThreshold, setAutomationHumanThreshold] = useState("");
+  const [automationAutoThreshold, setAutomationAutoThreshold] = useState("");
   const [automationAssignName, setAutomationAssignName] = useState("");
   const [automationAssignEmail, setAutomationAssignEmail] = useState("");
   const [automationWebhookUrl, setAutomationWebhookUrl] = useState("");
   const [automationWebhookToken, setAutomationWebhookToken] = useState("");
+  const [pendingDecisionReviewNote, setPendingDecisionReviewNote] = useState("");
+  const [playbookEventType, setPlaybookEventType] = useState("");
+  const [playbookSeverity, setPlaybookSeverity] = useState<"critical" | "high" | "medium" | "low">("high");
+  const [playbookVersion, setPlaybookVersion] = useState("1");
+  const [playbookTeam, setPlaybookTeam] = useState("");
+  const [playbookRunbook, setPlaybookRunbook] = useState("");
+  const [playbookAction, setPlaybookAction] = useState("");
   const [slaMonitorResult, setSlaMonitorResult] = useState("");
   const [memoryScore, setMemoryScore] = useState("4");
   const [memoryNote, setMemoryNote] = useState("");
@@ -281,6 +292,16 @@ function App() {
     queryKey: ["agent-actions", baseUrl, apiKey, accessToken, userRole, tenantId],
     queryFn: () => api.listAgentActions(tenantId, 50),
     enabled: !enforceAuth || Boolean(accessToken),
+  });
+  const pendingDecisions = useQuery({
+    queryKey: ["agent-pending-decisions", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentPendingDecisions(tenantId, "PENDING", 100),
+    enabled: isAdminUser && resolvedView === "admin" && (!enforceAuth || Boolean(accessToken)),
+  });
+  const agentPlaybooks = useQuery({
+    queryKey: ["agent-playbooks", baseUrl, apiKey, accessToken, userRole, tenantId],
+    queryFn: () => api.listAgentPlaybooks(tenantId, "", 200),
+    enabled: isAdminUser && resolvedView === "admin" && (!enforceAuth || Boolean(accessToken)),
   });
   const normalizedMemoryEventType =
     (selectedTicket.data?.machine_station ?? "").trim() || "GENERIC_EVENT";
@@ -457,6 +478,12 @@ function App() {
         at_risk_lead_minutes: Number(
           automationAtRiskLead || tenantAutomationPolicy.data?.at_risk_lead_minutes || 60,
         ),
+        human_review_threshold: Number(
+          automationHumanThreshold || tenantAutomationPolicy.data?.human_review_threshold || 0.75,
+        ),
+        auto_execute_threshold: Number(
+          automationAutoThreshold || tenantAutomationPolicy.data?.auto_execute_threshold || 0.85,
+        ),
         auto_assign_name: (automationAssignName || tenantAutomationPolicy.data?.auto_assign_name || "").trim(),
         auto_assign_email: (automationAssignEmail || tenantAutomationPolicy.data?.auto_assign_email || "").trim() || null,
         action_webhook_url: (automationWebhookUrl || tenantAutomationPolicy.data?.action_webhook_url || "").trim(),
@@ -480,6 +507,50 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["queue-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-metrics"] });
       queryClient.invalidateQueries({ queryKey: ["agent-proactive-summary"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const approvePendingDecisionMutation = useMutation({
+    mutationFn: (decisionId: number) => api.approveAgentPendingDecision(decisionId, pendingDecisionReviewNote),
+    onSuccess: () => {
+      setAdminError("");
+      setPendingDecisionReviewNote("");
+      queryClient.invalidateQueries({ queryKey: ["agent-pending-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-actions"] });
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const rejectPendingDecisionMutation = useMutation({
+    mutationFn: (decisionId: number) => api.rejectAgentPendingDecision(decisionId, pendingDecisionReviewNote),
+    onSuccess: () => {
+      setAdminError("");
+      setPendingDecisionReviewNote("");
+      queryClient.invalidateQueries({ queryKey: ["agent-pending-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["events"] });
+    },
+    onError: (error) => setAdminError(getErrorMessage(error)),
+  });
+  const createPlaybookMutation = useMutation({
+    mutationFn: () =>
+      api.createAgentPlaybook({
+        tenant_id: tenantId,
+        event_type: playbookEventType.trim().toUpperCase(),
+        severity: playbookSeverity,
+        version: Number(playbookVersion || "1"),
+        team: playbookTeam.trim(),
+        runbook: playbookRunbook.trim(),
+        action: playbookAction.trim(),
+        is_active: true,
+      }),
+    onSuccess: () => {
+      setAdminError("");
+      setPlaybookEventType("");
+      setPlaybookVersion("1");
+      setPlaybookTeam("");
+      setPlaybookRunbook("");
+      setPlaybookAction("");
+      queryClient.invalidateQueries({ queryKey: ["agent-playbooks"] });
     },
     onError: (error) => setAdminError(getErrorMessage(error)),
   });
@@ -558,6 +629,8 @@ function App() {
     setSlaP4(String(tenantSlaPolicy.data?.p4_minutes ?? 1440));
     setAutomationWindow(String(tenantAutomationPolicy.data?.correlation_window_minutes ?? 1440));
     setAutomationAtRiskLead(String(tenantAutomationPolicy.data?.at_risk_lead_minutes ?? 60));
+    setAutomationHumanThreshold(String(tenantAutomationPolicy.data?.human_review_threshold ?? 0.75));
+    setAutomationAutoThreshold(String(tenantAutomationPolicy.data?.auto_execute_threshold ?? 0.85));
     setAutomationAssignName(tenantAutomationPolicy.data?.auto_assign_name ?? "");
     setAutomationAssignEmail(tenantAutomationPolicy.data?.auto_assign_email ?? "");
     setAutomationWebhookUrl(tenantAutomationPolicy.data?.action_webhook_url ?? "");
@@ -1409,6 +1482,30 @@ function App() {
                     />
                   </label>
                   <label>
+                    Soglia revisione umana (0.50 - 0.99)
+                    <input
+                      type="number"
+                      min={0.5}
+                      max={0.99}
+                      step={0.01}
+                      value={automationHumanThreshold}
+                      onChange={(e) => setAutomationHumanThreshold(e.target.value)}
+                      placeholder="0.75"
+                    />
+                  </label>
+                  <label>
+                    Soglia auto-execution (0.50 - 0.99)
+                    <input
+                      type="number"
+                      min={0.5}
+                      max={0.99}
+                      step={0.01}
+                      value={automationAutoThreshold}
+                      onChange={(e) => setAutomationAutoThreshold(e.target.value)}
+                      placeholder="0.85"
+                    />
+                  </label>
+                  <label>
                     Nome assegnazione automatica
                     <input
                       value={automationAssignName}
@@ -1452,6 +1549,119 @@ function App() {
                   </div>
                   {slaMonitorResult && <p className="subtitle">{slaMonitorResult}</p>}
                 </div>
+
+                <h3 style={{ marginTop: 16 }}>Decisioni AI in attesa revisione</h3>
+                <p className="subtitle">Approva o rifiuta le azioni proposte quando la confidenza e sotto soglia.</p>
+                <div className="inline-form">
+                  <input
+                    value={pendingDecisionReviewNote}
+                    onChange={(e) => setPendingDecisionReviewNote(e.target.value)}
+                    placeholder="Nota revisore (opzionale)"
+                  />
+                </div>
+                {pendingDecisions.isLoading && <p>Caricamento coda approvazioni...</p>}
+                {pendingDecisions.isError && <p className="error">{getErrorMessage(pendingDecisions.error)}</p>}
+                {!pendingDecisions.isLoading && !pendingDecisions.isError && !(pendingDecisions.data ?? []).length && (
+                  <p className="subtitle">Nessuna decisione in attesa.</p>
+                )}
+                {!!(pendingDecisions.data ?? []).length && (
+                  <table className="admin-users-table">
+                    <thead><tr><th>Ticket</th><th>Evento</th><th>Conf.</th><th>Azione</th></tr></thead>
+                    <tbody>
+                      {(pendingDecisions.data ?? []).map((row: AgentPendingDecision) => (
+                        <tr key={row.id}>
+                          <td>{row.ticket_id}</td>
+                          <td>{String(row.payload.event_type ?? "-")}</td>
+                          <td>{row.confidence.toFixed(2)}</td>
+                          <td>
+                            <div className="inline-form">
+                              <button
+                                onClick={() => approvePendingDecisionMutation.mutate(row.id)}
+                                disabled={approvePendingDecisionMutation.isPending}
+                              >
+                                Approva
+                              </button>
+                              <button
+                                className="secondary-button"
+                                onClick={() => rejectPendingDecisionMutation.mutate(row.id)}
+                                disabled={rejectPendingDecisionMutation.isPending}
+                              >
+                                Rifiuta
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                <h3 style={{ marginTop: 16 }}>Catalogo playbook</h3>
+                <p className="subtitle">Versiona le azioni AI per evento/severita con controllo amministrativo.</p>
+                <div className="create-form">
+                  <label>
+                    Event Type
+                    <input value={playbookEventType} onChange={(e) => setPlaybookEventType(e.target.value)} placeholder="CONVEYOR_JAM" />
+                  </label>
+                  <label>
+                    Severity
+                    <select value={playbookSeverity} onChange={(e) => setPlaybookSeverity(e.target.value as "critical" | "high" | "medium" | "low")}>
+                      <option value="critical">critical</option>
+                      <option value="high">high</option>
+                      <option value="medium">medium</option>
+                      <option value="low">low</option>
+                    </select>
+                  </label>
+                  <label>
+                    Versione
+                    <input type="number" min={1} value={playbookVersion} onChange={(e) => setPlaybookVersion(e.target.value)} />
+                  </label>
+                  <label>
+                    Team owner
+                    <input value={playbookTeam} onChange={(e) => setPlaybookTeam(e.target.value)} placeholder="automation-maintenance" />
+                  </label>
+                  <label>
+                    Runbook
+                    <input value={playbookRunbook} onChange={(e) => setPlaybookRunbook(e.target.value)} placeholder="RB-LOG-001" />
+                  </label>
+                  <label className="full-row">
+                    Action
+                    <input value={playbookAction} onChange={(e) => setPlaybookAction(e.target.value)} placeholder="Describe the operational action" />
+                  </label>
+                  <div className="create-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!playbookEventType.trim() || !playbookTeam.trim() || !playbookRunbook.trim() || !playbookAction.trim()) {
+                          setAdminError("Compila tutti i campi playbook.");
+                          return;
+                        }
+                        createPlaybookMutation.mutate();
+                      }}
+                      disabled={createPlaybookMutation.isPending}
+                    >
+                      {createPlaybookMutation.isPending ? "Creazione..." : "Aggiungi playbook"}
+                    </button>
+                  </div>
+                </div>
+                {agentPlaybooks.isLoading && <p>Caricamento playbook...</p>}
+                {agentPlaybooks.isError && <p className="error">{getErrorMessage(agentPlaybooks.error)}</p>}
+                {!!agentPlaybooks.data?.length && (
+                  <table className="admin-users-table">
+                    <thead><tr><th>Evento</th><th>Sev.</th><th>Ver.</th><th>Team</th><th>Runbook</th></tr></thead>
+                    <tbody>
+                      {agentPlaybooks.data.slice(0, 20).map((row: AgentPlaybook) => (
+                        <tr key={row.id}>
+                          <td>{row.event_type}</td>
+                          <td>{row.severity}</td>
+                          <td>{row.version}</td>
+                          <td>{row.team}</td>
+                          <td>{row.runbook}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             )}
 

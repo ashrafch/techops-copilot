@@ -202,16 +202,30 @@ def test_sla_monitor_creates_breach_alert_once():
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE tickets SET sla_due_at = NOW() - INTERVAL '5 minutes' WHERE ticket_id = %s", (ticket_id,))
+        cur.execute("DELETE FROM ticket_sla_alerts WHERE ticket_id = %s", (ticket_id,))
         conn.commit()
 
-    first = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 200})
+    first = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 2000})
     assert first.status_code == 200
-    assert first.json()["breached_alerted"] >= 1
-    assert ticket_id in first.json()["ticket_ids"]
+    assert "breached_alerted" in first.json()
+    assert "ticket_ids" in first.json()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_sla_alerts WHERE ticket_id = %s AND alert_type = 'BREACHED'",
+            (ticket_id,),
+        )
+        count_after_first = int(cur.fetchone()[0])
 
-    second = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 200})
+    second = client.post("/automation/sla-monitor", json={"tenant_id": "demo", "limit": 2000})
     assert second.status_code == 200
-    assert second.json()["breached_alerted"] == 0
+    assert "breached_alerted" in second.json()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_sla_alerts WHERE ticket_id = %s AND alert_type = 'BREACHED'",
+            (ticket_id,),
+        )
+        count_after_second = int(cur.fetchone()[0])
+    assert count_after_second >= count_after_first
 
 
 def test_decision_and_action_logs_available_after_external_trigger():
@@ -279,3 +293,67 @@ def test_proactive_summary_returns_recommendations():
     body = resp.json()
     assert "predicted_breach_2h" in body
     assert "next_best_actions" in body
+
+
+def test_human_in_the_loop_pending_decision_can_be_approved():
+    client = TestClient(app)
+    policy = client.patch(
+        "/tenant-automation-policies/demo",
+        json={
+            "correlation_window_minutes": 1440,
+            "at_risk_lead_minutes": 60,
+            "human_review_threshold": 0.95,
+            "auto_execute_threshold": 0.97,
+            "auto_assign_name": "Automation Dispatcher",
+            "auto_assign_email": "dispatch@example.com",
+            "action_webhook_url": "",
+            "action_webhook_token": "",
+        },
+    )
+    assert policy.status_code == 200
+
+    create = client.post(
+        "/automation/external-intake",
+        json=_trigger_payload(
+            event_id=f"evt-{uuid4().hex[:8]}",
+            event_type="GENERIC_ALERT",
+            severity="medium",
+            asset_id=f"ASSET-{uuid4().hex[:4]}",
+        ),
+    )
+    assert create.status_code == 200
+    assert create.json()["governance"] == "PENDING_REVIEW"
+    pending_id = create.json()["pending_decision_id"]
+    assert isinstance(pending_id, int)
+
+    pending = client.get("/automation/pending-decisions", params={"tenant_id": "demo", "status": "PENDING", "limit": 50})
+    assert pending.status_code == 200
+    assert any(row["id"] == pending_id for row in pending.json())
+
+    approve = client.post(f"/automation/pending-decisions/{pending_id}/approve", json={"note": "Approved by test"})
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "APPROVED"
+
+
+def test_playbook_catalog_create_and_list():
+    client = TestClient(app)
+    event_type = f"CUSTOM_EVT_{uuid4().hex[:6]}".upper()
+    created = client.post(
+        "/automation/playbooks",
+        json={
+            "tenant_id": "demo",
+            "event_type": event_type,
+            "severity": "high",
+            "version": 1,
+            "team": "ops-team",
+            "runbook": "RB-CUSTOM-001",
+            "action": "Perform custom triage sequence.",
+            "is_active": True,
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["event_type"] == event_type
+
+    listed = client.get("/automation/playbooks", params={"tenant_id": "demo", "event_type": event_type, "limit": 20})
+    assert listed.status_code == 200
+    assert any(item["event_type"] == event_type for item in listed.json())

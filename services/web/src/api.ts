@@ -123,6 +123,8 @@ export interface TenantAutomationPolicy {
   tenant_id: string;
   correlation_window_minutes: number;
   at_risk_lead_minutes: number;
+  human_review_threshold: number;
+  auto_execute_threshold: number;
   auto_assign_name: string;
   auto_assign_email?: string | null;
   action_webhook_url: string;
@@ -222,6 +224,32 @@ export interface AgentMemorySuggestion {
   ticket_id: string;
   outcome_score: number;
   resolution_note: string;
+  created_at: string;
+}
+
+export interface AgentPendingDecision {
+  id: number;
+  tenant_id: string;
+  ticket_id: string;
+  event_id: string;
+  confidence: number;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  payload: Record<string, unknown>;
+  approved_by: string;
+  approved_at: string | null;
+  created_at: string;
+}
+
+export interface AgentPlaybook {
+  id: number;
+  tenant_id: string;
+  event_type: string;
+  severity: string;
+  version: number;
+  team: string;
+  runbook: string;
+  action: string;
+  is_active: boolean;
   created_at: string;
 }
 
@@ -405,6 +433,8 @@ export function createApiClient(options: ApiClientOptions) {
       payload: {
         correlation_window_minutes: number;
         at_risk_lead_minutes: number;
+        human_review_threshold: number;
+        auto_execute_threshold: number;
         auto_assign_name: string;
         auto_assign_email?: string | null;
         action_webhook_url?: string;
@@ -437,6 +467,28 @@ export function createApiClient(options: ApiClientOptions) {
       getJson<AgentMemorySuggestion[]>(
         `/automation/memory/suggestions?tenant_id=${encodeURIComponent(tenantId)}&event_type=${encodeURIComponent(eventType)}&asset_id=${encodeURIComponent(assetId)}&limit=${limit}`,
       ),
+    listAgentPendingDecisions: (tenantId: string, status: "PENDING" | "APPROVED" | "REJECTED" = "PENDING", limit = 100) =>
+      getJson<AgentPendingDecision[]>(
+        `/automation/pending-decisions?tenant_id=${encodeURIComponent(tenantId)}&status=${encodeURIComponent(status)}&limit=${limit}`,
+      ),
+    approveAgentPendingDecision: (decisionId: number, note = "") =>
+      postJson<{ ok: boolean; id: number; status: string }>(`/automation/pending-decisions/${decisionId}/approve`, { note }),
+    rejectAgentPendingDecision: (decisionId: number, note = "") =>
+      postJson<{ ok: boolean; id: number; status: string }>(`/automation/pending-decisions/${decisionId}/reject`, { note }),
+    listAgentPlaybooks: (tenantId: string, eventType = "", limit = 200) =>
+      getJson<AgentPlaybook[]>(
+        `/automation/playbooks?tenant_id=${encodeURIComponent(tenantId)}&event_type=${encodeURIComponent(eventType)}&limit=${limit}`,
+      ),
+    createAgentPlaybook: (payload: {
+      tenant_id: string;
+      event_type: string;
+      severity: "critical" | "high" | "medium" | "low";
+      version: number;
+      team: string;
+      runbook: string;
+      action: string;
+      is_active: boolean;
+    }) => postJson<AgentPlaybook>("/automation/playbooks", payload),
     listAdminUsers: (tenantId = "") =>
       getJson<AdminUser[]>(
         `/admin/users${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,

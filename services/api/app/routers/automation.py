@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, require_api_key
+from app.core.rbac import require_admin_role
 from app.core.tenant_guard import enforce_tenant_access
 from app.db.events import log_event
 from app.db.session import get_conn
@@ -38,6 +39,8 @@ class ExternalTriggerResponse(BaseModel):
     ticket_id: str
     status: str
     decision: Decision
+    governance: str
+    pending_decision_id: int | None = None
     priority: str
     reason: str
     confidence: float
@@ -117,15 +120,57 @@ class ProactiveSummaryOut(BaseModel):
     next_best_actions: list[ProactiveActionOut]
 
 
+class PendingDecisionOut(BaseModel):
+    id: int
+    tenant_id: str
+    ticket_id: str
+    event_id: str
+    confidence: float
+    status: str
+    payload: dict
+    approved_by: str
+    approved_at: datetime | None
+    created_at: datetime
+
+
+class PendingDecisionActionIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+
+
+class PlaybookOut(BaseModel):
+    id: int
+    tenant_id: str
+    event_type: str
+    severity: str
+    version: int
+    team: str
+    runbook: str
+    action: str
+    is_active: bool
+    created_at: datetime
+
+
+class PlaybookCreateIn(BaseModel):
+    tenant_id: str = Field(min_length=1)
+    event_type: str = Field(min_length=1, max_length=128)
+    severity: Severity = "medium"
+    version: int = Field(ge=1, le=1000)
+    team: str = Field(min_length=1, max_length=255)
+    runbook: str = Field(min_length=1, max_length=255)
+    action: str = Field(min_length=1, max_length=2000)
+    is_active: bool = True
+
+
 def _subject(event_type: str, summary: str) -> str:
     return f"[{event_type.strip().upper()}] {summary.strip()}"
 
 
-def _load_automation_policy(conn, tenant_id: str) -> dict[str, str | int]:
+def _load_automation_policy(conn, tenant_id: str) -> dict[str, str | int | float]:
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT correlation_window_minutes, at_risk_lead_minutes,
+                   human_review_threshold, auto_execute_threshold,
                    auto_assign_name, auto_assign_email,
                    action_webhook_url, action_webhook_token
             FROM tenant_automation_policies
@@ -138,6 +183,8 @@ def _load_automation_policy(conn, tenant_id: str) -> dict[str, str | int]:
         return {
             "correlation_window_minutes": 1440,
             "at_risk_lead_minutes": 60,
+            "human_review_threshold": 0.75,
+            "auto_execute_threshold": 0.85,
             "auto_assign_name": "",
             "auto_assign_email": "",
             "action_webhook_url": "",
@@ -146,11 +193,34 @@ def _load_automation_policy(conn, tenant_id: str) -> dict[str, str | int]:
     return {
         "correlation_window_minutes": int(row[0]),
         "at_risk_lead_minutes": int(row[1]),
-        "auto_assign_name": row[2] or "",
-        "auto_assign_email": (row[3] or "").strip().lower(),
-        "action_webhook_url": row[4] or "",
-        "action_webhook_token": row[5] or "",
+        "human_review_threshold": float(row[2]),
+        "auto_execute_threshold": float(row[3]),
+        "auto_assign_name": row[4] or "",
+        "auto_assign_email": (row[5] or "").strip().lower(),
+        "action_webhook_url": row[6] or "",
+        "action_webhook_token": row[7] or "",
     }
+
+
+def _resolve_playbook(conn, tenant_id: str, event_type: str, severity: str) -> dict[str, str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT team, runbook, action
+            FROM agent_playbooks
+            WHERE tenant_id = %s
+              AND event_type = %s
+              AND severity = %s
+              AND is_active = TRUE
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (tenant_id, event_type.strip().upper(), severity.strip().lower()),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return recommend_playbook(event_type, severity)
+    return {"team": row[0], "runbook": row[1], "action": row[2]}
 
 
 def _lookup_memory_hint(conn, tenant_id: str, event_type: str, asset_id: str) -> str:
@@ -253,6 +323,28 @@ def _insert_action_log(
                 json.dumps(response_payload),
             ),
         )
+
+
+def _create_pending_decision(
+    conn,
+    *,
+    tenant_id: str,
+    ticket_id: str,
+    event_id: str,
+    confidence: float,
+    payload: dict,
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO agent_pending_decisions (tenant_id, ticket_id, event_id, confidence, status, payload)
+            VALUES (%s, %s, %s, %s, 'PENDING', %s::jsonb)
+            RETURNING id
+            """,
+            (tenant_id, ticket_id, event_id, confidence, json.dumps(payload)),
+        )
+        row = cur.fetchone()
+    return int(row[0])
 
 
 def _execute_action_webhook(
@@ -360,7 +452,6 @@ def _execute_action_webhook(
 def automation_external_intake(payload: ExternalTriggerRequest, current_user=Depends(get_current_user)):
     enforce_tenant_access(requested_tenant_id=payload.tenant_id, current_user=current_user)
     priority, reason = priority_from_signal(payload.event_type, payload.severity)
-    playbook = recommend_playbook(payload.event_type, payload.severity)
     event_at = payload.occurred_at or datetime.utcnow()
 
     with get_conn() as conn:
@@ -371,6 +462,9 @@ def automation_external_intake(payload: ExternalTriggerRequest, current_user=Dep
             correlation_from = datetime.utcnow() - timedelta(minutes=correlation_window_minutes)
             auto_assign_name = str(policy["auto_assign_name"])
             auto_assign_email = str(policy["auto_assign_email"])
+            human_review_threshold = float(policy["human_review_threshold"])
+            auto_execute_threshold = float(policy["auto_execute_threshold"])
+            playbook = _resolve_playbook(conn, payload.tenant_id, payload.event_type, payload.severity)
             memory_hint = _lookup_memory_hint(conn, payload.tenant_id, payload.event_type, payload.asset_id)
             if memory_hint:
                 playbook = {**playbook, "memory_hint": memory_hint}
@@ -407,6 +501,7 @@ def automation_external_intake(payload: ExternalTriggerRequest, current_user=Dep
                         ticket_id=existing[0],
                         status="OPEN",
                         decision="DUPLICATE",
+                        governance="AUTO_EXECUTED",
                         priority=priority,
                         reason=reason,
                         confidence=confidence,
@@ -477,22 +572,59 @@ def automation_external_intake(payload: ExternalTriggerRequest, current_user=Dep
                         memory_hint=memory_hint,
                         playbook=playbook,
                     )
-                    _execute_action_webhook(
-                        conn,
-                        tenant_id=payload.tenant_id,
-                        ticket_id=ticket_id,
-                        decision="CORRELATED",
-                        priority=priority,
-                        reason=reason,
-                        confidence=confidence,
-                        playbook=playbook,
-                        policy=policy,
-                    )
+                    governance = "PENDING_REVIEW" if confidence < auto_execute_threshold else "AUTO_EXECUTED"
+                    pending_decision_id = None
+                    if governance == "PENDING_REVIEW":
+                        pending_decision_id = _create_pending_decision(
+                            conn,
+                            tenant_id=payload.tenant_id,
+                            ticket_id=ticket_id,
+                            event_id=payload.event_id,
+                            confidence=confidence,
+                            payload={
+                                "decision": "CORRELATED",
+                                "priority": priority,
+                                "reason": reason,
+                                "confidence": confidence,
+                                "source_system": payload.source_system,
+                                "event_type": payload.event_type,
+                                "playbook": playbook,
+                                "policy_thresholds": {
+                                    "human_review_threshold": human_review_threshold,
+                                    "auto_execute_threshold": auto_execute_threshold,
+                                },
+                            },
+                        )
+                        log_event(
+                            conn=conn,
+                            ticket_id=ticket_id,
+                            event_type="NOTE",
+                            message="AI action pending human review",
+                            meta={
+                                "source": "automation-governance",
+                                "pending_decision_id": pending_decision_id,
+                                "confidence": confidence,
+                            },
+                        )
+                    else:
+                        _execute_action_webhook(
+                            conn,
+                            tenant_id=payload.tenant_id,
+                            ticket_id=ticket_id,
+                            decision="CORRELATED",
+                            priority=priority,
+                            reason=reason,
+                            confidence=confidence,
+                            playbook=playbook,
+                            policy=policy,
+                        )
                     conn.commit()
                     return ExternalTriggerResponse(
                         ticket_id=ticket_id,
                         status=correlated[1],
                         decision="CORRELATED",
+                        governance=governance,
+                        pending_decision_id=pending_decision_id,
                         priority=priority,
                         reason=reason,
                         confidence=confidence,
@@ -584,23 +716,83 @@ def automation_external_intake(payload: ExternalTriggerRequest, current_user=Dep
                     memory_hint=memory_hint,
                     playbook=playbook,
                 )
-                _execute_action_webhook(
-                    conn,
-                    tenant_id=payload.tenant_id,
-                    ticket_id=ticket_id,
-                    decision="CREATED",
-                    priority=priority,
-                    reason=reason,
-                    confidence=confidence,
-                    playbook=playbook,
-                    policy=policy,
-                )
+                governance = "AUTO_EXECUTED"
+                pending_decision_id = None
+                if confidence < human_review_threshold:
+                    governance = "PENDING_REVIEW"
+                    pending_decision_id = _create_pending_decision(
+                        conn,
+                        tenant_id=payload.tenant_id,
+                        ticket_id=ticket_id,
+                        event_id=payload.event_id,
+                        confidence=confidence,
+                        payload={
+                            "decision": "CREATED",
+                            "priority": priority,
+                            "reason": reason,
+                            "confidence": confidence,
+                            "source_system": payload.source_system,
+                            "event_type": payload.event_type,
+                            "playbook": playbook,
+                            "policy_thresholds": {
+                                "human_review_threshold": human_review_threshold,
+                                "auto_execute_threshold": auto_execute_threshold,
+                            },
+                        },
+                    )
+                    log_event(
+                        conn=conn,
+                        ticket_id=ticket_id,
+                        event_type="NOTE",
+                        message="AI action pending human review",
+                        meta={
+                            "source": "automation-governance",
+                            "pending_decision_id": pending_decision_id,
+                            "confidence": confidence,
+                        },
+                    )
+                elif confidence < auto_execute_threshold:
+                    governance = "PENDING_REVIEW"
+                    pending_decision_id = _create_pending_decision(
+                        conn,
+                        tenant_id=payload.tenant_id,
+                        ticket_id=ticket_id,
+                        event_id=payload.event_id,
+                        confidence=confidence,
+                        payload={
+                            "decision": "CREATED",
+                            "priority": priority,
+                            "reason": reason,
+                            "confidence": confidence,
+                            "source_system": payload.source_system,
+                            "event_type": payload.event_type,
+                            "playbook": playbook,
+                            "policy_thresholds": {
+                                "human_review_threshold": human_review_threshold,
+                                "auto_execute_threshold": auto_execute_threshold,
+                            },
+                        },
+                    )
+                else:
+                    _execute_action_webhook(
+                        conn,
+                        tenant_id=payload.tenant_id,
+                        ticket_id=ticket_id,
+                        decision="CREATED",
+                        priority=priority,
+                        reason=reason,
+                        confidence=confidence,
+                        playbook=playbook,
+                        policy=policy,
+                    )
 
             conn.commit()
             return ExternalTriggerResponse(
                 ticket_id=ticket_id,
                 status="OPEN",
                 decision="CREATED",
+                governance=governance,
+                pending_decision_id=pending_decision_id,
                 priority=priority,
                 reason=reason,
                 confidence=confidence,
@@ -930,3 +1122,273 @@ def proactive_summary(
         unassigned_open=unassigned_open,
         next_best_actions=actions,
     )
+
+
+@router.get("/pending-decisions", response_model=list[PendingDecisionOut])
+def list_pending_decisions(
+    tenant_id: str = Query(..., min_length=1),
+    status: str = Query("PENDING", pattern="^(PENDING|APPROVED|REJECTED)$"),
+    limit: int = Query(100, ge=1, le=500),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, tenant_id, ticket_id, event_id, confidence, status, payload, approved_by, approved_at, created_at
+            FROM agent_pending_decisions
+            WHERE tenant_id = %s
+              AND status = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+            """,
+            (tenant_id, status, limit),
+        )
+        rows = cur.fetchall()
+    return [
+        PendingDecisionOut(
+            id=row[0],
+            tenant_id=row[1],
+            ticket_id=row[2],
+            event_id=row[3],
+            confidence=float(row[4]),
+            status=row[5],
+            payload=row[6] or {},
+            approved_by=row[7] or "",
+            approved_at=row[8],
+            created_at=row[9],
+        )
+        for row in rows
+    ]
+
+
+@router.post("/pending-decisions/{decision_id}/approve")
+def approve_pending_decision(
+    decision_id: int,
+    payload: PendingDecisionActionIn,
+    _: None = Depends(require_admin_role),
+    current_user=Depends(get_current_user),
+):
+    actor_email = (current_user.email if current_user else "").strip() or "system"
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT tenant_id, ticket_id, status, payload
+                    FROM agent_pending_decisions
+                    WHERE id = %s
+                    """,
+                    (decision_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Pending decision not found")
+                tenant_id, ticket_id, status, pending_payload = row
+                enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+                if status != "PENDING":
+                    raise HTTPException(status_code=409, detail="Decision already processed")
+
+            policy = _load_automation_policy(conn, tenant_id)
+            data = pending_payload or {}
+            decision = str(data.get("decision", "CREATED"))
+            priority = str(data.get("priority", "P3"))
+            reason = str(data.get("reason", "approved_by_human"))
+            confidence = float(data.get("confidence", 0.5))
+            playbook = data.get("playbook", {})
+            if not isinstance(playbook, dict):
+                playbook = {}
+            _execute_action_webhook(
+                conn,
+                tenant_id=tenant_id,
+                ticket_id=ticket_id,
+                decision=decision,  # type: ignore[arg-type]
+                priority=priority,
+                reason=reason,
+                confidence=confidence,
+                playbook=playbook,
+                policy=policy,
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE agent_pending_decisions
+                    SET status = 'APPROVED',
+                        approved_by = %s,
+                        approved_at = NOW(),
+                        payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{review_note}', to_jsonb(%s::text), true)
+                    WHERE id = %s
+                    """,
+                    (actor_email, payload.note.strip(), decision_id),
+                )
+            log_event(
+                conn=conn,
+                ticket_id=ticket_id,
+                event_type="NOTE",
+                message="AI pending action approved by operator",
+                meta={
+                    "source": "automation-governance",
+                    "decision_id": decision_id,
+                    "actor_email": actor_email,
+                    "note": payload.note.strip(),
+                },
+            )
+            conn.commit()
+            return {"ok": True, "id": decision_id, "status": "APPROVED"}
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.post("/pending-decisions/{decision_id}/reject")
+def reject_pending_decision(
+    decision_id: int,
+    payload: PendingDecisionActionIn,
+    _: None = Depends(require_admin_role),
+    current_user=Depends(get_current_user),
+):
+    actor_email = (current_user.email if current_user else "").strip() or "system"
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT tenant_id, ticket_id, status
+                    FROM agent_pending_decisions
+                    WHERE id = %s
+                    """,
+                    (decision_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Pending decision not found")
+                tenant_id, ticket_id, status = row
+                enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+                if status != "PENDING":
+                    raise HTTPException(status_code=409, detail="Decision already processed")
+                cur.execute(
+                    """
+                    UPDATE agent_pending_decisions
+                    SET status = 'REJECTED',
+                        approved_by = %s,
+                        approved_at = NOW(),
+                        payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{review_note}', to_jsonb(%s::text), true)
+                    WHERE id = %s
+                    """,
+                    (actor_email, payload.note.strip(), decision_id),
+                )
+            log_event(
+                conn=conn,
+                ticket_id=ticket_id,
+                event_type="NOTE",
+                message="AI pending action rejected by operator",
+                meta={
+                    "source": "automation-governance",
+                    "decision_id": decision_id,
+                    "actor_email": actor_email,
+                    "note": payload.note.strip(),
+                },
+            )
+            conn.commit()
+            return {"ok": True, "id": decision_id, "status": "REJECTED"}
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+
+@router.get("/playbooks", response_model=list[PlaybookOut])
+def list_playbooks(
+    tenant_id: str = Query(..., min_length=1),
+    event_type: str = Query("", min_length=0),
+    limit: int = Query(200, ge=1, le=500),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=tenant_id, current_user=current_user)
+    where = ["tenant_id = %s"]
+    params: list[object] = [tenant_id]
+    if event_type.strip():
+        where.append("event_type = %s")
+        params.append(event_type.strip().upper())
+    params.append(limit)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, tenant_id, event_type, severity, version, team, runbook, action, is_active, created_at
+            FROM agent_playbooks
+            WHERE {" AND ".join(where)}
+            ORDER BY event_type ASC, severity ASC, version DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+    return [
+        PlaybookOut(
+            id=row[0],
+            tenant_id=row[1],
+            event_type=row[2],
+            severity=row[3],
+            version=row[4],
+            team=row[5],
+            runbook=row[6],
+            action=row[7],
+            is_active=row[8],
+            created_at=row[9],
+        )
+        for row in rows
+    ]
+
+
+@router.post("/playbooks", response_model=PlaybookOut)
+def create_playbook(
+    payload: PlaybookCreateIn,
+    _: None = Depends(require_admin_role),
+    current_user=Depends(get_current_user),
+):
+    enforce_tenant_access(requested_tenant_id=payload.tenant_id, current_user=current_user)
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO agent_playbooks (tenant_id, event_type, severity, version, team, runbook, action, is_active)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id, tenant_id, event_type, severity, version, team, runbook, action, is_active, created_at
+                    """,
+                    (
+                        payload.tenant_id,
+                        payload.event_type.strip().upper(),
+                        payload.severity.strip().lower(),
+                        payload.version,
+                        payload.team.strip(),
+                        payload.runbook.strip(),
+                        payload.action.strip(),
+                        payload.is_active,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return PlaybookOut(
+                id=row[0],
+                tenant_id=row[1],
+                event_type=row[2],
+                severity=row[3],
+                version=row[4],
+                team=row[5],
+                runbook=row[6],
+                action=row[7],
+                is_active=row[8],
+                created_at=row[9],
+            )
+        except Exception:
+            conn.rollback()
+            raise
