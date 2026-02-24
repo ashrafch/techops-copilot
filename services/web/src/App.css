@@ -121,6 +121,27 @@
   margin-bottom: 0;
 }
 
+.admin-settings-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.admin-section {
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  padding: 0.8rem;
+  background: #f9fcff;
+}
+
+.admin-section h3 {
+  margin: 0 0 0.45rem;
+}
+
+.admin-users-table {
+  margin-top: 0.75rem;
+}
+
 .kpi-row {
   display: flex;
   gap: 0.6rem;
