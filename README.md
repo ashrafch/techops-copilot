@@ -327,3 +327,23 @@ powershell -ExecutionPolicy Bypass -File scripts/apply_db_migrations.ps1
 Hardening affidabilita' workflow n8n:
 - guida: `n8n/docs/reliability_hardening.md`
 - script patch automatico: `scripts/patch_n8n_reliability.ps1`
+
+## AI Agent: external trigger automation (logistica/automazione)
+
+Nuovo endpoint machine-to-machine:
+
+- `POST /automation/external-intake`
+
+Caso d'uso: sistemi esterni (WMS, PLC, telemetria linea) inviano eventi tecnici e l'agente crea o correla ticket in automatico.
+
+Comportamento automatico:
+- deduplica per `(tenant_id, source_system, event_id)`
+- correlazione su ticket aperto stesso `asset_id` + `event_type`
+- priorita' derivata da severita' + regole dominio
+- playbook operativo suggerito nel payload di risposta
+
+Script demo rapido:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/simulate_logistics_trigger.ps1
+```

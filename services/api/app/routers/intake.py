@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, EmailStr, Field
 from typing import Literal, Optional
@@ -7,6 +7,7 @@ from app.core.auth import require_api_key
 from app.core.rbac import require_operator_role
 from app.db.session import get_conn
 from app.db.events import log_event  # NEW
+from app.db.ticket_id import next_ticket_id
 from app.domain.sla_service import compute_sla_due_at, get_sla_minutes_for_priority
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -35,32 +36,12 @@ class IntakeResponse(BaseModel):
     ticket_id: str
     status: str
 
-def _next_ticket_id(conn) -> str:
-    today = date.today()
-    ymd = today.strftime("%Y%m%d")
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO ticket_sequences (day, last_seq)
-            VALUES (%s, 0)
-            ON CONFLICT (day) DO NOTHING
-            """,
-            (today,),
-        )
-        cur.execute("SELECT last_seq FROM ticket_sequences WHERE day = %s FOR UPDATE", (today,))
-        last = cur.fetchone()[0]
-        new_seq = last + 1
-        cur.execute("UPDATE ticket_sequences SET last_seq = %s WHERE day = %s", (new_seq, today))
-
-    return f"TCK-{ymd}-{new_seq:04d}"
-
 @router.post("/intake", response_model=IntakeResponse)
 def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
     with get_conn() as conn:
         conn.autocommit = False
         try:
-            ticket_id = _next_ticket_id(conn)
+            ticket_id = next_ticket_id(conn)
             now = datetime.utcnow()
             sla_minutes = get_sla_minutes_for_priority(conn, req.tenant_id, req.priority)
             sla_due_at = compute_sla_due_at(now, sla_minutes)
