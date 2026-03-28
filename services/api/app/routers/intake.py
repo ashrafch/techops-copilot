@@ -1,47 +1,92 @@
 from datetime import datetime
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, Literal
-import re
+from typing import Literal, Optional
 
-router = APIRouter()
+from app.core.auth import require_api_key
+from app.core.rbac import require_operator_role
+from app.db.session import get_conn
+from app.db.events import log_event  # NEW
+from app.db.ticket_id import next_ticket_id
+from app.domain.sla_service import compute_sla_due_at, get_sla_minutes_for_priority
+
+router = APIRouter(dependencies=[Depends(require_api_key)])
+
+Priority = Literal["P1", "P2", "P3", "P4"]
 
 class Requester(BaseModel):
-    name: str = Field(..., min_length=1)
-    email: Optional[EmailStr] = None
+    name: str = Field(min_length=1)
+    email: EmailStr
 
 class Machine(BaseModel):
-    line: Optional[str] = None
-    station: Optional[str] = None
-    serial: Optional[str] = None
+    line: str = ""
+    station: str = ""
+    serial: str = ""
 
-class IntakeIn(BaseModel):
-    tenant_id: str = Field(..., min_length=1)
-    source: str = Field(default="webhook")
+class IntakeRequest(BaseModel):
+    tenant_id: str = Field(min_length=1)
+    source: Optional[str] = "webhook"
     requester: Requester
-    subject: str = Field(..., min_length=1)
-    description_raw: str = Field(..., min_length=1)
-    machine: Optional[Machine] = None
-    priority: Literal["P1", "P2", "P3", "P4"] = "P3"
+    subject: str = Field(min_length=1)
+    description_raw: str = Field(min_length=1)
+    machine: Machine = Machine()
+    priority: Priority = "P3"
 
-class IntakeOut(BaseModel):
+class IntakeResponse(BaseModel):
     ticket_id: str
     status: str
 
-_counter = 0
+@router.post("/intake", response_model=IntakeResponse)
+def intake(req: IntakeRequest, _: None = Depends(require_operator_role)):
+    with get_conn() as conn:
+        conn.autocommit = False
+        try:
+            ticket_id = next_ticket_id(conn)
+            now = datetime.utcnow()
+            sla_minutes = get_sla_minutes_for_priority(conn, req.tenant_id, req.priority)
+            sla_due_at = compute_sla_due_at(now, sla_minutes)
 
-def _slug(s: str) -> str:
-    s = s.strip().upper()
-    s = re.sub(r"[^A-Z0-9]+", "-", s)
-    return s.strip("-")[:32] or "TICKET"
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tickets (
+                      ticket_id, tenant_id, status,
+                      subject, priority, description_raw,
+                      requester_name, requester_email,
+                      machine_line, machine_station, machine_serial,
+                      sla_due_at, first_response_at, resolved_at,
+                      created_at, updated_at
+                    )
+                    VALUES (%s,%s,'OPEN', %s,%s,%s, %s,%s, %s,%s,%s, %s,NULL,NULL, %s,%s)
+                    """,
+                    (
+                        ticket_id, req.tenant_id,
+                        req.subject, req.priority, req.description_raw,
+                        req.requester.name, str(req.requester.email),
+                        req.machine.line, req.machine.station, req.machine.serial,
+                        sla_due_at,
+                        now, now
+                    ),
+                )
 
-@router.post("/intake", response_model=IntakeOut)
-def intake(payload: IntakeIn):
-    # MVP: genera un ticket id deterministico (poi lo mettiamo su Postgres)
-    global _counter
-    _counter += 1
+            # NEW: log evento "CREATED"
+            log_event(
+                conn=conn,
+                ticket_id=ticket_id,
+                event_type="CREATED",
+                message="Ticket created via intake",
+                meta={
+                    "tenant_id": req.tenant_id,
+                    "source": req.source,
+                    "priority": req.priority,
+                    "sla_due_at": sla_due_at.isoformat(),
+                    "requester": {"name": req.requester.name, "email": str(req.requester.email)},
+                    "machine": {"line": req.machine.line, "station": req.machine.station, "serial": req.machine.serial},
+                },
+            )
 
-    date_part = datetime.utcnow().strftime("%Y%m%d")
-    ticket_id = f"TCK-{date_part}-{_counter:04d}"
-
-    return IntakeOut(ticket_id=ticket_id, status="OPEN")
+            conn.commit()
+            return IntakeResponse(ticket_id=ticket_id, status="OPEN")
+        except Exception:
+            conn.rollback()
+            raise

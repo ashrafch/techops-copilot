@@ -1,18 +1,41 @@
 services:
-  postgres:
+  # =========================
+  # Postgres per APP (tuo prodotto)
+  # =========================
+  postgres_app:
     image: postgres:16
+    container_name: techops-postgres-app
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_APP_DB}
+      POSTGRES_USER: ${POSTGRES_APP_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD}
     ports:
       - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata_app:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
 
+  # =========================
+  # Postgres per N8N (solo n8n)
+  # =========================
+  postgres_n8n:
+    image: postgres:16
+    container_name: techops-postgres-n8n
+    environment:
+      POSTGRES_DB: ${POSTGRES_N8N_DB}
+      POSTGRES_USER: ${POSTGRES_N8N_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_N8N_PASSWORD}
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata_n8n:/var/lib/postgresql/data
+
+  # =========================
+  # MinIO (S3)
+  # =========================
   minio:
     image: minio/minio:latest
+    container_name: techops-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -23,31 +46,49 @@ services:
     volumes:
       - miniodata:/data
 
+  # =========================
+  # n8n
+  # =========================
   n8n:
     image: n8nio/n8n:latest
+    container_name: techops-n8n
     ports:
       - "5678:5678"
     environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      - N8N_HOST=${N8N_HOST}
-      - N8N_PORT=${N8N_PORT}
-      - N8N_PROTOCOL=${N8N_PROTOCOL}
-      # IMPORTANT: self-hosted, meglio tenerlo in "own" mode
-      - N8N_DIAGNOSTICS_ENABLED=false
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres_n8n
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_N8N_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_N8N_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_N8N_PASSWORD}
+
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: ${N8N_PORT}
+      N8N_PROTOCOL: ${N8N_PROTOCOL}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+
     depends_on:
-      - postgres
+      - postgres_n8n
     volumes:
       - n8n_data:/home/node/.n8n
 
+  # =========================
+  # API
+  # =========================
   api:
     build: ./services/api
+    container_name: techops-api
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      API_KEY: ${API_KEY:-}
+      REQUIRE_API_KEY: ${REQUIRE_API_KEY:-false}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      ENFORCE_RBAC: ${ENFORCE_RBAC:-false}
+      ENFORCE_AUTH: ${ENFORCE_AUTH:-false}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-dev_auth_secret_change_me}
+      AUTH_TOKEN_TTL_MINUTES: ${AUTH_TOKEN_TTL_MINUTES:-480}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_BUCKET: ${S3_BUCKET}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -55,10 +96,27 @@ services:
     ports:
       - "${API_PORT}:8000"
     depends_on:
-      - postgres
+      - postgres_app
       - minio
 
+  # =========================
+  # Web UI
+  # =========================
+  web:
+    build: ./services/web
+    container_name: techops-web
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${API_PORT}}
+      VITE_API_KEY: ${VITE_API_KEY:-}
+      VITE_USER_ROLE: ${VITE_USER_ROLE:-operator}
+      VITE_ENFORCE_AUTH: ${VITE_ENFORCE_AUTH:-false}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    depends_on:
+      - api
+
 volumes:
-  pgdata:
+  pgdata_app:
+  pgdata_n8n:
   miniodata:
   n8n_data:
